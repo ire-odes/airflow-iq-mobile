@@ -11,10 +11,11 @@ export function AuthProvider({ children }) {
 
   const loadTechnicianAssignments = async (email) => {
     if (!email) { setTechnicianAssignments([]); return; }
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("technician_assignments")
       .select("id, landlord_id, technician_email")
       .eq("technician_email", email);
+    if (error) { console.warn("loadTechnicianAssignments:", error.message); return; }
     setTechnicianAssignments(data || []);
   };
 

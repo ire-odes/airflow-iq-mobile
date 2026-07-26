@@ -1,4 +1,8 @@
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { Appearance } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
+const THEME_STORAGE_KEY = "app_theme_preference"; // "light" | "dark"
 
 export const light = {
   bg: "#F7F8FC",
@@ -31,9 +35,28 @@ export const dark = {
 const ThemeContext = createContext(null);
 
 export function ThemeProvider({ children }) {
-  const [isDark, setIsDark] = useState(false);
+  const [isDark, setIsDark] = useState(Appearance.getColorScheme() === "dark");
+
+  // Restore the saved preference; fall back to the system scheme
+  useEffect(() => {
+    AsyncStorage.getItem(THEME_STORAGE_KEY)
+      .then((saved) => {
+        if (saved === "dark") setIsDark(true);
+        else if (saved === "light") setIsDark(false);
+      })
+      .catch((e) => console.warn("Theme load failed:", e.message));
+  }, []);
+
   const theme = isDark ? dark : light;
-  const toggleTheme = () => setIsDark((prev) => !prev);
+
+  const toggleTheme = () => {
+    setIsDark((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem(THEME_STORAGE_KEY, next ? "dark" : "light")
+        .catch((e) => console.warn("Theme save failed:", e.message));
+      return next;
+    });
+  };
 
   return (
     <ThemeContext.Provider value={{ theme, isDark, toggleTheme }}>

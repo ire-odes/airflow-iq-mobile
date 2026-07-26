@@ -8,6 +8,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { useTheme } from "../../context/ThemeContext";
+import {
+  FILTER_INTERVAL_MIN_DAYS, FILTER_INTERVAL_MAX_DAYS, DEFAULT_FILTER_INTERVAL_DAYS,
+  WAKE_INTERVAL_MIN_SECONDS, WAKE_INTERVAL_MAX_SECONDS, DEFAULT_WAKE_INTERVAL_SECONDS,
+} from "../../lib/config";
 
 let Haptics = null;
 try { Haptics = require("expo-haptics"); } catch (_) {}
@@ -251,8 +255,8 @@ function ClaimDeviceModal({ visible, onClose, onClaimed, theme }) {
 function EditDeviceModal({ visible, device, onClose, onSave, theme, isOwner }) {
   const [name, setName] = useState("");
   const [location, setLocation] = useState("");
-  const [intervalDays, setIntervalDays] = useState("90");
-  const [wakeInterval, setWakeInterval] = useState("300");
+  const [intervalDays, setIntervalDays] = useState(`${DEFAULT_FILTER_INTERVAL_DAYS}`);
+  const [wakeInterval, setWakeInterval] = useState(`${DEFAULT_WAKE_INTERVAL_SECONDS}`);
   const [tenantEmail, setTenantEmail] = useState("");
   const [tenantEnabled, setTenantEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -260,18 +264,36 @@ function EditDeviceModal({ visible, device, onClose, onSave, theme, isOwner }) {
   useEffect(() => {
     setName(device?.name || "");
     setLocation(device?.hvac_location || "");
-    setIntervalDays(`${device?.filter_interval_days || 90}`);
-    setWakeInterval(`${device?.wake_interval_seconds || 300}`);
+    // Clamp legacy values into the allowed range so the form opens valid
+    const storedInterval = device?.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS;
+    setIntervalDays(`${Math.min(Math.max(storedInterval, FILTER_INTERVAL_MIN_DAYS), FILTER_INTERVAL_MAX_DAYS)}`);
+    const storedWake = device?.wake_interval_seconds || DEFAULT_WAKE_INTERVAL_SECONDS;
+    setWakeInterval(`${Math.min(Math.max(storedWake, WAKE_INTERVAL_MIN_SECONDS), WAKE_INTERVAL_MAX_SECONDS)}`);
     setTenantEmail(device?.tenant_email || "");
     setTenantEnabled(!!device?.tenant_email);
   }, [device]);
 
   const handleSave = async () => {
     if (!name.trim()) { Alert.alert("Error", "Device name is required"); return; }
-    const interval = parseInt(intervalDays) || 90;
-    if (interval < 7 || interval > 365) { Alert.alert("Error", "Filter interval must be between 7 and 365 days"); return; }
-    const wake = parseInt(wakeInterval) || 300;
-    if (wake < 30 || wake > 86400) { Alert.alert("Error", "Wake interval must be between 30s and 86400s (24h)"); return; }
+
+    // Technicians may only edit name and location — the DB enforces this too
+    if (!isOwner) {
+      setSaving(true);
+      await onSave({ name: name.trim(), hvac_location: location.trim() });
+      setSaving(false);
+      return;
+    }
+
+    const interval = parseInt(intervalDays) || DEFAULT_FILTER_INTERVAL_DAYS;
+    if (interval < FILTER_INTERVAL_MIN_DAYS || interval > FILTER_INTERVAL_MAX_DAYS) {
+      Alert.alert("Error", `Filter interval must be between ${FILTER_INTERVAL_MIN_DAYS} and ${FILTER_INTERVAL_MAX_DAYS} days`);
+      return;
+    }
+    const wake = parseInt(wakeInterval) || DEFAULT_WAKE_INTERVAL_SECONDS;
+    if (wake < WAKE_INTERVAL_MIN_SECONDS || wake > WAKE_INTERVAL_MAX_SECONDS) {
+      Alert.alert("Error", `Wake interval must be between ${WAKE_INTERVAL_MIN_SECONDS / 60} minutes and 24 hours`);
+      return;
+    }
     if (tenantEnabled && tenantEmail && !tenantEmail.includes("@")) { Alert.alert("Error", "Please enter a valid tenant email"); return; }
     setSaving(true);
     await onSave({
@@ -285,11 +307,11 @@ function EditDeviceModal({ visible, device, onClose, onSave, theme, isOwner }) {
   };
 
   const WAKE_PRESETS = [
-    { label: "30s", value: "30" },
-    { label: "1m",  value: "60" },
-    { label: "5m",  value: "300" },
+    { label: "10m", value: "600" },
     { label: "15m", value: "900" },
+    { label: "30m", value: "1800" },
     { label: "1h",  value: "3600" },
+    { label: "6h",  value: "21600" },
   ];
 
   return (
@@ -338,7 +360,7 @@ function EditDeviceModal({ visible, device, onClose, onSave, theme, isOwner }) {
                       </View>
                       <View style={[modal.divider, { backgroundColor: theme.divider }]} />
                       <View style={modal.presetRow}>
-                        {["30", "60", "90", "120"].map(d => (
+                        {["7", "14", "21", "30"].map(d => (
                           <TouchableOpacity key={d} style={[modal.preset, { backgroundColor: intervalDays === d ? "#007BFF" : theme.divider }]} onPress={() => { haptic(); setIntervalDays(d); }}>
                             <Text style={[modal.presetText, { color: intervalDays === d ? "#fff" : theme.subtext }]}>{d}d</Text>
                           </TouchableOpacity>
@@ -352,7 +374,7 @@ function EditDeviceModal({ visible, device, onClose, onSave, theme, isOwner }) {
                         <View style={[modal.fieldIcon, { backgroundColor: theme.inputBg }]}><Ionicons name="pulse-outline" size={18} color={theme.subtext} /></View>
                         <View style={{ flex: 1 }}>
                           <Text style={[modal.label, { color: theme.subtext }]}>Wake Interval</Text>
-                          <Text style={[modal.helperText, { color: theme.subtext }]}>How often the device wakes up to collect data</Text>
+                          <Text style={[modal.helperText, { color: theme.subtext }]}>How often the device wakes up to collect data (min 10 minutes)</Text>
                           <View style={modal.intervalRow}>
                             <TextInput
                               style={[modal.intervalInput, { color: theme.text, borderColor: theme.border, width: 80 }]}
@@ -431,9 +453,9 @@ function DeviceCard({ device, onEdit, onDelete, index, theme, lastSeen, latestDa
   const status = getOnlineStatus(lastSeen);
   const statusColor = status === "online" ? "#22c55e" : status === "idle" ? "#f59e0b" : "#9ca3af";
   const statusLabel = status === "online" ? "Online" : status === "idle" ? "Idle" : "Offline";
-  const filterProgress = getFilterProgress(filterInstalledAt, device.filter_interval_days || 90);
+  const filterProgress = getFilterProgress(filterInstalledAt, device.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS);
   const addedDate = device.created_at ? new Date(device.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "";
-  const wakeSeconds = device.wake_interval_seconds || 300;
+  const wakeSeconds = device.wake_interval_seconds || DEFAULT_WAKE_INTERVAL_SECONDS;
   const wakeLabel = wakeSeconds < 60 ? `${wakeSeconds}s` : wakeSeconds < 3600 ? `${wakeSeconds / 60}m` : `${wakeSeconds / 3600}h`;
 
   const battVoltage = latestData?.battery;
@@ -490,7 +512,7 @@ function DeviceCard({ device, onEdit, onDelete, index, theme, lastSeen, latestDa
         <View style={[styles.filterInfoRow, { backgroundColor: theme.inputBg }]}>
           <View style={styles.filterInfoItem}>
             <Ionicons name="time-outline" size={13} color={theme.subtext} />
-            <Text style={[styles.filterInfoText, { color: theme.subtext }]}>Filter every {device.filter_interval_days || 90}d</Text>
+            <Text style={[styles.filterInfoText, { color: theme.subtext }]}>Filter every {device.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS}d</Text>
           </View>
           <View style={styles.filterInfoItem}>
             <Ionicons name="pulse-outline" size={13} color={theme.subtext} />
@@ -554,7 +576,12 @@ export default function DevicesScreen() {
         : Promise.resolve({ data: [] }),
     ]);
 
-    if (ownedResult.error) { Alert.alert("Error", "Failed to load devices"); return; }
+    if (ownedResult.error) {
+      setLoading(false);
+      Alert.alert("Error", "Failed to load devices: " + ownedResult.error.message);
+      return;
+    }
+    if (techResult.error) console.warn("loadDevices (technician):", techResult.error.message);
 
     const devs = [
       ...(ownedResult.data || []).map(d => ({ ...d, _isOwner: true })),
@@ -568,14 +595,16 @@ export default function DevicesScreen() {
       const stats = {};
       const installDates = {};
       await Promise.all(devs.map(async (dev) => {
-        const { data: logs } = await supabase.from("sensor_logs")
+        const { data: logs, error: logsError } = await supabase.from("sensor_logs")
           .select("recorded_at, battery")
           .eq("device_id", dev.id).order("recorded_at", { ascending: false }).limit(1);
+        if (logsError) console.warn(`sensor_logs (${dev.id}):`, logsError.message);
         if (logs?.length > 0) stats[dev.id] = { lastSeen: logs[0].recorded_at, latestData: logs[0] };
 
-        const { data: rfidLogs } = await supabase.from("sensor_logs")
+        const { data: rfidLogs, error: rfidError } = await supabase.from("sensor_logs")
           .select("recorded_at, rfid").eq("device_id", dev.id)
           .not("rfid", "is", null).order("recorded_at", { ascending: false }).limit(100);
+        if (rfidError) console.warn(`rfid logs (${dev.id}):`, rfidError.message);
 
         if (rfidLogs?.length > 0) {
           const currentRfid = rfidLogs[0].rfid;
@@ -594,8 +623,17 @@ export default function DevicesScreen() {
   const onRefresh = async () => { setRefreshing(true); await loadDevices(); setRefreshing(false); };
 
   const handleEdit = async (formData) => {
-    const { error } = await supabase.from("devices").update(formData).eq("id", editingDevice.id);
-    if (error) { Alert.alert("Error", "Failed to update device"); return; }
+    // .select() makes RLS-blocked updates visible: 0 rows back = not saved
+    const { data, error } = await supabase
+      .from("devices")
+      .update(formData)
+      .eq("id", editingDevice.id)
+      .select("id");
+    if (error) { Alert.alert("Error", "Failed to update device: " + error.message); return; }
+    if (!data || data.length === 0) {
+      Alert.alert("Not Saved", "You don't have permission to edit this device.");
+      return;
+    }
     Alert.alert("Saved", "Device settings updated.");
     setEditVisible(false);
     loadDevices();
@@ -615,7 +653,7 @@ export default function DevicesScreen() {
   const onlineCount = Object.values(deviceStats).filter(s => getOnlineStatus(s.lastSeen) === "online").length;
   const offlineCount = devices.length - onlineCount;
   const needsReplacementCount = devices.filter(d => {
-    const fp = getFilterProgress(filterInstallDates[d.id], d.filter_interval_days || 90);
+    const fp = getFilterProgress(filterInstallDates[d.id], d.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS);
     return fp && fp.pct >= 90;
   }).length;
 
@@ -668,29 +706,61 @@ export default function DevicesScreen() {
       ) : (
         <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#007BFF" />}>
-          {devices.length === 0 ? (
-            <View style={styles.empty}>
-              <View style={[styles.emptyIcon, { backgroundColor: theme.card }]}>
-                <Ionicons name="hardware-chip-outline" size={40} color="#007BFF" />
-              </View>
-              <Text style={[styles.emptyText, { color: theme.text }]}>No devices yet</Text>
-              <Text style={[styles.emptySubText, { color: theme.subtext }]}>Tap "Claim Device" and scan your device's QR code</Text>
-              <TouchableOpacity style={styles.emptyBtn} onPress={() => setClaimVisible(true)}>
-                <Text style={styles.emptyBtnText}>Claim Your First Device</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            devices.map((d, i) => (
-              <DeviceCard key={d.id} device={d} index={i} theme={theme}
-                lastSeen={deviceStats[d.id]?.lastSeen}
-                latestData={deviceStats[d.id]?.latestData}
-                filterInstalledAt={filterInstallDates[d.id]}
-                isOwner={d._isOwner}
-                onEdit={(dev) => { setEditingDevice(dev); setEditVisible(true); }}
-                onDelete={handleDelete}
-              />
-            ))
-          )}
+          {(() => {
+            const myDevices = devices.filter(d => d._isOwner);
+            const techDevices = devices.filter(d => !d._isOwner);
+
+            if (myDevices.length === 0 && techDevices.length === 0) {
+              return (
+                <View style={styles.empty}>
+                  <View style={[styles.emptyIcon, { backgroundColor: theme.card }]}>
+                    <Ionicons name="hardware-chip-outline" size={40} color="#007BFF" />
+                  </View>
+                  <Text style={[styles.emptyText, { color: theme.text }]}>No devices yet</Text>
+                  <Text style={[styles.emptySubText, { color: theme.subtext }]}>Tap "Claim Device" and scan your device's QR code</Text>
+                  <TouchableOpacity style={styles.emptyBtn} onPress={() => setClaimVisible(true)}>
+                    <Text style={styles.emptyBtnText}>Claim Your First Device</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            }
+
+            const cardProps = (d) => ({
+              key: d.id, device: d, theme,
+              lastSeen: deviceStats[d.id]?.lastSeen,
+              latestData: deviceStats[d.id]?.latestData,
+              filterInstalledAt: filterInstallDates[d.id],
+              isOwner: d._isOwner,
+              onEdit: (dev) => { setEditingDevice(dev); setEditVisible(true); },
+              onDelete: handleDelete,
+            });
+
+            return (
+              <>
+                {myDevices.length > 0 && (
+                  <>
+                    {techDevices.length > 0 && (
+                      <Text style={[styles.sectionLabel, { color: theme.subtext }]}>MY DEVICES</Text>
+                    )}
+                    {myDevices.map((d, i) => <DeviceCard key={d.id} index={i} {...cardProps(d)} />)}
+                  </>
+                )}
+
+                {techDevices.length > 0 && (
+                  <>
+                    <View style={[styles.sectionHeader, { borderColor: theme.border }]}>
+                      <Ionicons name="construct-outline" size={14} color="#0284c7" />
+                      <Text style={[styles.sectionLabel, { color: "#0284c7", marginBottom: 0 }]}>MANAGED PROPERTIES</Text>
+                    </View>
+                    <Text style={[styles.sectionDesc, { color: theme.subtext }]}>
+                      You can edit the name and location of these devices.
+                    </Text>
+                    {techDevices.map((d, i) => <DeviceCard key={d.id} index={i} {...cardProps(d)} />)}
+                  </>
+                )}
+              </>
+            );
+          })()}
         </ScrollView>
       )}
 
@@ -740,6 +810,9 @@ const styles = StyleSheet.create({
   deleteBtnText: { color: "#ef4444", fontWeight: "700", fontSize: 13 },
   techBadge: { flexDirection: "row", alignItems: "center", gap: 3, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
   techBadgeText: { fontSize: 10, fontWeight: "700", color: "#0284c7" },
+  sectionLabel: { fontSize: 11, fontWeight: "700", letterSpacing: 0.8, marginBottom: 8, marginTop: 8, marginHorizontal: 2 },
+  sectionHeader: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 16, marginBottom: 4, paddingTop: 16, borderTopWidth: 1 },
+  sectionDesc: { fontSize: 12, marginBottom: 8, marginHorizontal: 2 },
   empty: { alignItems: "center", paddingTop: 60, gap: 10 },
   emptyIcon: { width: 80, height: 80, borderRadius: 24, justifyContent: "center", alignItems: "center", marginBottom: 8 },
   emptyText: { fontSize: 20, fontWeight: "800" },

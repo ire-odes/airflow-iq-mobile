@@ -9,6 +9,11 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { useTheme } from "../../context/ThemeContext";
 import { saveThresholds, loadThresholds } from "../../lib/notifications";
+import {
+  fetchSubscription, isSubscriptionActive, startSubscriptionCheckout,
+  openBillingPortal, SUBSCRIPTION_PLANS,
+} from "../../lib/billing";
+import { APP_VERSION } from "../../lib/config";
 
 let Haptics = null;
 try { Haptics = require("expo-haptics"); } catch (_) {}
@@ -133,9 +138,13 @@ export default function AccountScreen() {
   const [inviteLoading, setInviteLoading] = useState(false);
   const [landlordNames, setLandlordNames] = useState({});
 
+  const [subscription, setSubscription] = useState(null);
+  const [subLoading, setSubLoading] = useState(false);
+
   useEffect(() => {
     loadProfile();
     loadTeamData();
+    loadSubscription();
   }, []);
 
   useEffect(() => {
@@ -145,7 +154,8 @@ export default function AccountScreen() {
   const loadProfile = async () => {
     const userId = session?.user?.id;
     if (!userId) return;
-    const { data } = await supabase.from("profiles").select("full_name").eq("id", userId).single();
+    const { data, error } = await supabase.from("profiles").select("full_name").eq("id", userId).maybeSingle();
+    if (error) console.warn("loadProfile:", error.message);
     setDisplayName(data?.full_name || "");
     setLoading(false);
   };
@@ -153,21 +163,56 @@ export default function AccountScreen() {
   const loadTeamData = async () => {
     const userId = session?.user?.id;
     if (!userId) return;
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("technician_assignments")
       .select("id, technician_email")
       .eq("landlord_id", userId)
       .maybeSingle();
+    if (error) { console.warn("loadTeamData:", error.message); return; }
     setMyTechnician(data || null);
   };
 
   const loadLandlordNames = async () => {
     if (!technicianAssignments.length) return;
     const ids = technicianAssignments.map(a => a.landlord_id);
-    const { data } = await supabase.from("profiles").select("id, full_name").in("id", ids);
+    const { data, error } = await supabase.from("profiles").select("id, full_name").in("id", ids);
+    if (error) { console.warn("loadLandlordNames:", error.message); return; }
     const map = {};
     (data || []).forEach(p => { map[p.id] = p.full_name || "Your landlord"; });
     setLandlordNames(map);
+  };
+
+  const loadSubscription = async () => {
+    const userId = session?.user?.id;
+    if (!userId) return;
+    try {
+      setSubscription(await fetchSubscription(userId));
+    } catch (e) {
+      // Table may not exist until backend setup is run — treat as free plan
+      console.warn("loadSubscription:", e.message);
+    }
+  };
+
+  const handleUpgrade = async () => {
+    setSubLoading(true);
+    try {
+      await startSubscriptionCheckout();
+      await loadSubscription();
+    } catch (e) {
+      Alert.alert("Upgrade Failed", e.message);
+    }
+    setSubLoading(false);
+  };
+
+  const handleManageBilling = async () => {
+    setSubLoading(true);
+    try {
+      await openBillingPortal();
+      await loadSubscription();
+    } catch (e) {
+      Alert.alert("Billing Portal", e.message);
+    }
+    setSubLoading(false);
   };
 
   const inviteTechnician = async () => {
@@ -192,7 +237,8 @@ export default function AccountScreen() {
     Alert.alert("Remove Technician", `Remove ${myTechnician.technician_email} as your technician?`, [
       { text: "Cancel", style: "cancel" },
       { text: "Remove", style: "destructive", onPress: async () => {
-        await supabase.from("technician_assignments").delete().eq("id", myTechnician.id);
+        const { error } = await supabase.from("technician_assignments").delete().eq("id", myTechnician.id);
+        if (error) { Alert.alert("Error", "Failed to remove technician: " + error.message); return; }
         setMyTechnician(null);
       }},
     ]);
@@ -254,6 +300,65 @@ export default function AccountScreen() {
             <View style={{ flex: 1 }}><Text style={[styles.rowLabel, { color: theme.subtext }]}>User ID</Text><Text style={[styles.rowValue, { color: theme.subtext, fontSize: 12, fontFamily: "monospace" }]} numberOfLines={1} ellipsizeMode="middle">{session?.user?.id}</Text></View>
           </View>
         </View>
+
+        {/* Subscription */}
+        {(() => {
+          const active = isSubscriptionActive(subscription);
+          const plan = active ? SUBSCRIPTION_PLANS.pro : SUBSCRIPTION_PLANS.free;
+          const renewal = subscription?.current_period_end
+            ? new Date(subscription.current_period_end).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+            : null;
+          return (
+            <>
+              <View style={styles.sectionLabel}><Text style={[styles.sectionTitle, { color: theme.subtext }]}>Subscription</Text></View>
+              <View style={[styles.card, { backgroundColor: theme.card, borderColor: active ? "#007BFF40" : theme.border }]}>
+                <View style={styles.cardRow}>
+                  <View style={[styles.rowIcon, { backgroundColor: active ? "#EBF5FF" : theme.inputBg }]}>
+                    <Ionicons name={active ? "star" : "star-outline"} size={18} color={active ? "#007BFF" : theme.subtext} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.rowLabel, { color: theme.subtext }]}>Current Plan</Text>
+                    <Text style={[styles.rowValue, { color: theme.text }]}>
+                      {plan.name}{active && subscription?.status === "past_due" ? " · payment issue" : ""}
+                    </Text>
+                    {active && renewal && (
+                      <Text style={[styles.rowLabel, { color: theme.subtext, marginTop: 2 }]}>
+                        {subscription?.cancel_at_period_end ? `Ends ${renewal}` : `Renews ${renewal}`}
+                      </Text>
+                    )}
+                  </View>
+                  {active && (
+                    <View style={styles.proBadge}><Text style={styles.proBadgeText}>PRO</Text></View>
+                  )}
+                </View>
+                <View style={[styles.rowDivider, { backgroundColor: theme.divider, marginLeft: 58 }]} />
+                {!active && (
+                  <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+                    {SUBSCRIPTION_PLANS.pro.features.map(f => (
+                      <View key={f} style={styles.featureRow}>
+                        <Ionicons name="checkmark-circle" size={14} color="#22c55e" />
+                        <Text style={[styles.featureText, { color: theme.subtext }]}>{f}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                <TouchableOpacity
+                  style={[styles.subBtn, active ? { backgroundColor: theme.inputBg } : { backgroundColor: "#007BFF" }]}
+                  onPress={() => { haptic(); active ? handleManageBilling() : handleUpgrade(); }}
+                  disabled={subLoading}
+                >
+                  {subLoading ? (
+                    <ActivityIndicator color={active ? "#007BFF" : "#fff"} size="small" />
+                  ) : (
+                    <Text style={[styles.subBtnText, { color: active ? theme.text : "#fff" }]}>
+                      {active ? "Manage Billing" : `Upgrade to Pro · ${SUBSCRIPTION_PLANS.pro.priceLabel}`}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </>
+          );
+        })()}
 
         {/* Appearance */}
         <View style={styles.sectionLabel}><Text style={[styles.sectionTitle, { color: theme.subtext }]}>Appearance</Text></View>
@@ -361,7 +466,7 @@ export default function AccountScreen() {
           <Text style={styles.signOutText}>Sign Out</Text>
         </TouchableOpacity>
 
-        <Text style={[styles.version, { color: theme.subtext }]}>AirFlow IQ Mobile v1.0.0</Text>
+        <Text style={[styles.version, { color: theme.subtext }]}>AirFlow IQ Mobile v{APP_VERSION}</Text>
       </ScrollView>
 
       <ChangePasswordModal visible={changePassVisible} onClose={() => setChangePassVisible(false)} theme={theme} />
@@ -388,6 +493,12 @@ const styles = StyleSheet.create({
   rowDivider: { height: 1 },
   editLink: { fontSize: 14, fontWeight: "700", color: "#007BFF" },
   inlineInput: { fontSize: 15, fontWeight: "600", borderBottomWidth: 1.5, paddingBottom: 2 },
+  proBadge: { backgroundColor: "#007BFF", borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  proBadgeText: { color: "#fff", fontSize: 10, fontWeight: "800", letterSpacing: 0.5 },
+  featureRow: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
+  featureText: { fontSize: 13, fontWeight: "500" },
+  subBtn: { borderRadius: 12, padding: 14, alignItems: "center", margin: 16, marginTop: 12 },
+  subBtnText: { fontWeight: "700", fontSize: 14 },
   signOutBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 18, padding: 18, marginTop: 16, borderWidth: 1.5 },
   signOutText: { color: "#ef4444", fontSize: 16, fontWeight: "700" },
   version: { textAlign: "center", fontSize: 12, marginTop: 24 },

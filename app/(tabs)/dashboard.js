@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Dimensions, RefreshControl, Modal, Linking,
+  ActivityIndicator, Dimensions, RefreshControl, Modal, Linking, Alert,
 } from "react-native";
 import { BarChart, LineChart } from "react-native-gifted-charts";
 import { supabase } from "../../lib/supabase";
@@ -9,9 +9,9 @@ import { useAuth } from "../../context/AuthContext";
 import { useTheme } from "../../context/ThemeContext";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
+import { GEMINI_API_KEY, DEFAULT_FILTER_INTERVAL_DAYS } from "../../lib/config";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
-const GEMINI_API_KEY = "YOUR_GEMINI_API_KEY_HERE";
 
 // ── Unit conversion helpers ───────────────────────────────────────────────────
 const cToF = (c) => (c == null ? null : c * 9 / 5 + 32);
@@ -58,6 +58,7 @@ const TIME_RANGES = [
 const FILTER_RANGES = ["D", "W", "M", "Y"];
 
 async function callGemini(prompt) {
+  if (!GEMINI_API_KEY) return null;
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
     {
@@ -466,7 +467,7 @@ export default function DashboardScreen() {
   useEffect(() => { fetchData(); fetchAverages(); setSelectedBarIndex(null); }, [selectedDevice, selectedRangeIndex, offsetMultiplier, selectedMetric]);
   useEffect(() => { buildFilterBarData(); }, [filterChanges, filterRange]);
   useEffect(() => {
-    if (Object.keys(averages).length > 0) { setAiInsight(null); runAiInsight(); }
+    if (GEMINI_API_KEY && Object.keys(averages).length > 0) { setAiInsight(null); runAiInsight(); }
   }, [averages, selectedRangeIndex]);
   useEffect(() => { computePrediction(); }, [filterChanges, filterInstalledAt]);
 
@@ -518,35 +519,36 @@ export default function DashboardScreen() {
   const getUserDeviceIds = async () => {
     const userId = session?.user?.id;
     if (!userId) return [];
-    const { data } = await supabase.from("devices").select("id").eq("owner_id", userId);
+    const { data, error } = await supabase.from("devices").select("id").eq("owner_id", userId);
+    if (error) console.warn("getUserDeviceIds:", error.message);
     return (data || []).map((d) => d.id);
   };
 
   const fetchDevices = async () => {
-  const userId = session?.user?.id;
-  console.log("fetchDevices userId:", userId); // ← add this temporarily
-  if (!userId) return;
-  const { data, error } = await supabase
-    .from("devices")
-    .select("id, name, hvac_location, tenant_email")
-    .eq("owner_id", userId);
-  console.log("devices data:", data, "error:", error); // ← and this
-  const list = data || [];
-  setDevices(list);
-  if (list.length > 0) {
-    setSelectedDevice(prev => prev ?? list[0].id);
-  }
-};
+    const userId = session?.user?.id;
+    if (!userId) return;
+    const { data, error } = await supabase
+      .from("devices")
+      .select("id, name, hvac_location, tenant_email, filter_interval_days")
+      .eq("owner_id", userId);
+    if (error) { console.warn("fetchDevices:", error.message); return; }
+    const list = data || [];
+    setDevices(list);
+    if (list.length > 0) {
+      setSelectedDevice(prev => prev ?? list[0].id);
+    }
+  };
 
   // FIX: added battery to the latest readings fetch
   const fetchLatestReadings = async () => {
     const deviceIds = await getUserDeviceIds();
     if (deviceIds.length === 0) return;
-    const { data } = await supabase.from("sensor_logs")
+    const { data, error } = await supabase.from("sensor_logs")
       .select("temp_c, humidity, pressure_pa, windSpeed, recorded_at")
       .in("device_id", deviceIds)
       .order("recorded_at", { ascending: false })
       .limit(1);
+    if (error) { console.warn("fetchLatestReadings:", error.message); return; }
     if (data && data.length > 0) {
       setLatestReadings({
         temp_c: parseFloat(data[0].temp_c),
@@ -561,8 +563,9 @@ export default function DashboardScreen() {
   const fetchFilterData = async () => {
     const deviceIds = await getUserDeviceIds();
     if (deviceIds.length === 0) return;
-    const { data } = await supabase.from("sensor_logs").select("recorded_at, rfid, device_id")
+    const { data, error } = await supabase.from("sensor_logs").select("recorded_at, rfid, device_id")
       .in("device_id", deviceIds).not("rfid", "is", null).order("recorded_at", { ascending: true });
+    if (error) { console.warn("fetchFilterData:", error.message); return; }
     if (!data || data.length === 0) return;
     const latest = [...data].reverse().find((r) => r.rfid);
     const currRfid = latest?.rfid || null;
@@ -601,7 +604,7 @@ export default function DashboardScreen() {
         return;
       }
     }
-    const intervalDays = devices[0]?.filter_interval_days || 90;
+    const intervalDays = devices[0]?.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS;
     setAvgFilterLifespan(intervalDays);
     setPredictedDaysLeft(Math.max(0, intervalDays - daysSinceInstall));
   };

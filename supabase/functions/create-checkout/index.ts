@@ -3,7 +3,7 @@
 // session for one-time payment. Line/order totals are computed by the
 // database triggers (trg_calc_order_item_line_total / trg_recalc_order_totals).
 import {
-  corsHeaders, jsonResponse, getStripe, getAdminClient, getCallingUser, billingReturnUrl,
+  corsHeaders, jsonResponse, getStripe, getAdminClient, getCallingUser, resolveReturnUrl,
 } from "../_shared/utils.ts";
 
 Deno.serve(async (req) => {
@@ -13,7 +13,9 @@ Deno.serve(async (req) => {
     const user = await getCallingUser(req);
     if (!user) return jsonResponse({ error: "Not authenticated" }, 401);
 
-    const { items } = await req.json();
+    // return_to is optional and only honoured for the configured web origin
+    // (see resolveReturnUrl); mobile omits it and gets the deep-link page.
+    const { items, return_to } = await req.json();
     if (!Array.isArray(items) || items.length === 0) {
       return jsonResponse({ error: "Cart is empty" }, 400);
     }
@@ -86,8 +88,8 @@ Deno.serve(async (req) => {
       }),
       shipping_address_collection: { allowed_countries: ["US", "CA"] },
       metadata: { order_id: order.id, user_id: user.id },
-      success_url: billingReturnUrl("success"),
-      cancel_url: billingReturnUrl("cancel"),
+      success_url: resolveReturnUrl(return_to, "success"),
+      cancel_url: resolveReturnUrl(return_to, "cancel"),
     });
 
     await admin

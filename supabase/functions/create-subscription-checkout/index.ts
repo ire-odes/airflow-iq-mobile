@@ -2,7 +2,7 @@
 // Starts a Stripe Checkout session for the Pro subscription.
 // Requires secret STRIPE_PRO_PRICE_ID (a recurring Price id, e.g. price_...).
 import {
-  corsHeaders, jsonResponse, getStripe, getAdminClient, getCallingUser, billingReturnUrl,
+  corsHeaders, jsonResponse, getStripe, getAdminClient, getCallingUser, resolveReturnUrl,
 } from "../_shared/utils.ts";
 
 Deno.serve(async (req) => {
@@ -11,6 +11,8 @@ Deno.serve(async (req) => {
   try {
     const user = await getCallingUser(req);
     if (!user) return jsonResponse({ error: "Not authenticated" }, 401);
+
+    const { return_to } = await req.json().catch(() => ({}));
 
     const priceId = Deno.env.get("STRIPE_PRO_PRICE_ID");
     if (!priceId) return jsonResponse({ error: "Subscriptions are not configured yet" }, 500);
@@ -44,8 +46,8 @@ Deno.serve(async (req) => {
       line_items: [{ price: priceId, quantity: 1 }],
       subscription_data: { metadata: { user_id: user.id } },
       metadata: { user_id: user.id },
-      success_url: billingReturnUrl("success"),
-      cancel_url: billingReturnUrl("cancel"),
+      success_url: resolveReturnUrl(return_to, "success"),
+      cancel_url: resolveReturnUrl(return_to, "cancel"),
     });
 
     return jsonResponse({ url: session.url });

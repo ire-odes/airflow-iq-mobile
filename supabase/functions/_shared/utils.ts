@@ -47,3 +47,28 @@ export async function getCallingUser(req: Request) {
 export function billingReturnUrl(status: string): string {
   return `${Deno.env.get("SUPABASE_URL")}/functions/v1/billing-return?status=${status}`;
 }
+
+// Where Stripe should send the user after checkout.
+//
+// The mobile app relies on billingReturnUrl(), which bounces through a deep
+// link — that does nothing in a desktop browser, so the web app passes its own
+// `return_to`. Anything a client supplies here ends up as a Stripe redirect
+// target, so it is only honoured when its origin exactly matches WEB_APP_URL;
+// otherwise we silently fall back to the deep-link page. Exact origin match,
+// not a prefix test — a prefix test would let `https://evil.com` through for a
+// WEB_APP_URL of `https://evil.com.attacker.net`.
+export function resolveReturnUrl(returnTo: unknown, status: string): string {
+  const allowed = Deno.env.get("WEB_APP_URL");
+  if (typeof returnTo === "string" && returnTo && allowed) {
+    try {
+      const target = new URL(returnTo);
+      if (target.origin === new URL(allowed).origin) {
+        target.searchParams.set("status", status);
+        return target.toString();
+      }
+    } catch {
+      // Malformed URL — fall through to the deep-link page.
+    }
+  }
+  return billingReturnUrl(status);
+}

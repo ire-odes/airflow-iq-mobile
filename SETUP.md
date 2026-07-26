@@ -43,6 +43,12 @@ linked to your project (`supabase link --project-ref hniplnaohvcbtmelatnz`):
 supabase secrets set STRIPE_SECRET_KEY=sk_test_...
 supabase secrets set STRIPE_PRO_PRICE_ID=price_...
 
+# Only needed for the desktop web app (web/). Stripe can't redirect a browser
+# to the airflowiq:// deep link the mobile app uses, so the web client sends a
+# return_to URL — it is honoured only when its origin matches this exactly.
+# Use http://localhost:5173 for local dev, your deployed origin in production.
+supabase secrets set WEB_APP_URL=http://localhost:5173
+
 supabase functions deploy create-checkout
 supabase functions deploy create-subscription-checkout
 supabase functions deploy customer-portal

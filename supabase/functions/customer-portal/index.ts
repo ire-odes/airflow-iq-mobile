@@ -1,7 +1,7 @@
 // POST {} → { url }
 // Opens the Stripe customer portal so users manage/cancel their subscription.
 import {
-  corsHeaders, jsonResponse, getStripe, getAdminClient, getCallingUser, billingReturnUrl,
+  corsHeaders, jsonResponse, getStripe, getAdminClient, getCallingUser, resolveReturnUrl,
 } from "../_shared/utils.ts";
 
 Deno.serve(async (req) => {
@@ -10,6 +10,8 @@ Deno.serve(async (req) => {
   try {
     const user = await getCallingUser(req);
     if (!user) return jsonResponse({ error: "Not authenticated" }, 401);
+
+    const { return_to } = await req.json().catch(() => ({}));
 
     const admin = getAdminClient();
     const { data: sub, error } = await admin
@@ -25,7 +27,7 @@ Deno.serve(async (req) => {
     const stripe = getStripe();
     const session = await stripe.billingPortal.sessions.create({
       customer: sub.stripe_customer_id,
-      return_url: billingReturnUrl("portal-done"),
+      return_url: resolveReturnUrl(return_to, "portal-done"),
     });
 
     return jsonResponse({ url: session.url });

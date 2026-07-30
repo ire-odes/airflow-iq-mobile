@@ -113,11 +113,11 @@ p { margin: 0; }
 .topbar-title { font-size: 22px; font-weight: 800; }
 .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 
-/* Dashboard-only: full-width brand gradient across the topbar, so the
-   property/device pickers read as white chips floating on it rather than
-   theme-following buttons. */
+/* Full-width brand gradient across every page's topbar — lighter in light
+   mode (gradFrom/gradTo are theme-driven CSS vars, see ThemeContext) so it
+   doesn't read as a heavy navy block against an otherwise bright page. */
 .topbar-gradient {
-  background: linear-gradient(120deg, #0b2f66, #007BFF);
+  background: linear-gradient(120deg, var(--gradFrom), var(--gradTo));
   backdrop-filter: none;
   border-bottom: none;
 }

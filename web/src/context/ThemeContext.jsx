@@ -16,6 +16,8 @@ export const light = {
   sidebar: "#FFFFFF",
   shadow: "0 2px 12px rgba(16, 24, 40, 0.06)",
   shadowLg: "0 8px 30px rgba(16, 24, 40, 0.10)",
+  gradFrom: "#2563eb",
+  gradTo: "#60a5fa",
 };
 
 export const dark = {
@@ -33,6 +35,8 @@ export const dark = {
   sidebar: "#141724",
   shadow: "0 2px 12px rgba(0, 0, 0, 0.35)",
   shadowLg: "0 8px 30px rgba(0, 0, 0, 0.5)",
+  gradFrom: "#0b2f66",
+  gradTo: "#007BFF",
 };
 
 const STORAGE_KEY = "airflow_theme";

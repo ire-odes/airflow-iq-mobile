@@ -134,6 +134,12 @@ export default function Account() {
     danger: true,
     action: async () => {
       await supabase.from("technician_assignments").delete().eq("id", myTechnician.id);
+      // Also revoke any property-specific grants for this email — otherwise
+      // "Remove" here silently leaves them with access to individual
+      // properties added separately from the Properties page. RLS scopes
+      // this delete to properties this landlord actually owns, so it can't
+      // touch a grant some other landlord gave the same email.
+      await supabase.from("property_technician_assignments").delete().eq("technician_email", myTechnician.technician_email);
       setMyTechnician(null);
       refreshTechnicianAssignments();
     },

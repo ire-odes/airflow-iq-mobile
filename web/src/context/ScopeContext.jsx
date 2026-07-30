@@ -87,11 +87,14 @@ export function ScopeProvider({ children }) {
     }
   }, [devicesInScope, selectedDeviceId]);
 
-  // When exactly one device is in scope, select it automatically — avoids an
-  // ambiguous "All devices" label (and an aggregate-of-one chart) when
-  // there's really only one thing to show.
+  // Always resolve to one real device when at least one is in scope — never
+  // leave it on the "All devices" aggregate. Charting raw readings from
+  // several devices interleaved in one series doesn't represent anything
+  // real (different devices, different wake schedules), so there's no
+  // legitimate case for showing it; the picker only ever narrows further
+  // from here.
   useEffect(() => {
-    if (!selectedDeviceId && devicesInScope.length === 1) {
+    if (!selectedDeviceId && devicesInScope.length >= 1) {
       setSelectedDeviceId(devicesInScope[0].id);
     }
   }, [devicesInScope, selectedDeviceId]);

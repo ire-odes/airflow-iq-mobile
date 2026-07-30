@@ -22,10 +22,13 @@ export default function ScopePicker() {
     setOpen(false);
   };
 
-  const label = selectedDevice ? (selectedDevice.name || "Device") : "All devices";
+  // selectedDevice should always be set once at least one device is in
+  // scope (ScopeContext auto-selects the first) — this fallback only shows
+  // for the brief instant before that resolves, or a genuinely empty scope.
+  const label = selectedDevice ? (selectedDevice.name || "Device") : "No device";
   const sublabel = selectedDevice
     ? (selectedDevice.hvac_location || selectedDevice.device_mac || "Single device")
-    : `${devicesInScope.length} device${devicesInScope.length === 1 ? "" : "s"}${selectedProperty ? ` in ${selectedProperty.name}` : ""}`;
+    : selectedProperty ? `No devices in ${selectedProperty.name}` : "No devices";
 
   return (
     <div className="dropdown" ref={ref}>
@@ -48,34 +51,22 @@ export default function ScopePicker() {
 
       {open && (
         <div className="dropdown-menu">
-          <button
-            className={`dropdown-item${!selectedDeviceId ? " selected" : ""}`}
-            onClick={() => pickDevice(null)}
-          >
-            <Icon name="chart" size={15} />
-            <span className="grow">All devices</span>
-            {!selectedDeviceId && <Icon name="check" size={15} />}
-          </button>
-
           {devicesInScope.length === 0 ? (
             <div className="hint" style={{ padding: "14px 12px" }}>
               No devices in this property yet.
             </div>
           ) : (
-            <>
-              <div className="dropdown-sep" />
-              {devicesInScope.map((d) => (
-                <button
-                  key={d.id}
-                  className={`dropdown-item${selectedDeviceId === d.id ? " selected" : ""}`}
-                  onClick={() => pickDevice(d.id)}
-                >
-                  <Icon name="device" size={15} />
-                  <span className="grow truncate">{d.name || "Unnamed device"}</span>
-                  {selectedDeviceId === d.id && <Icon name="check" size={15} />}
-                </button>
-              ))}
-            </>
+            devicesInScope.map((d) => (
+              <button
+                key={d.id}
+                className={`dropdown-item${selectedDeviceId === d.id ? " selected" : ""}`}
+                onClick={() => pickDevice(d.id)}
+              >
+                <Icon name="device" size={15} />
+                <span className="grow truncate">{d.name || "Unnamed device"}</span>
+                {selectedDeviceId === d.id && <Icon name="check" size={15} />}
+              </button>
+            ))
           )}
         </div>
       )}

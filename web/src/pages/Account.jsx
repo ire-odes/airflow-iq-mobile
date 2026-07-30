@@ -133,15 +133,20 @@ export default function Account() {
     confirmLabel: "Remove",
     danger: true,
     action: async () => {
-      await supabase.from("technician_assignments").delete().eq("id", myTechnician.id);
+      const { error: e1 } = await supabase.from("technician_assignments").delete().eq("id", myTechnician.id);
+      if (e1) throw new Error(`Failed to remove technician: ${e1.message}`);
+
       // Also revoke any property-specific grants for this email — otherwise
       // "Remove" here silently leaves them with access to individual
       // properties added separately from the Properties page. RLS scopes
       // this delete to properties this landlord actually owns, so it can't
       // touch a grant some other landlord gave the same email.
-      await supabase.from("property_technician_assignments").delete().eq("technician_email", myTechnician.technician_email);
+      const { error: e2 } = await supabase.from("property_technician_assignments").delete().eq("technician_email", myTechnician.technician_email);
+      if (e2) throw new Error(`Removed, but failed to clear property-level access: ${e2.message}`);
+
       setMyTechnician(null);
       refreshTechnicianAssignments();
+      flash("Technician removed");
     },
   });
 
@@ -155,7 +160,11 @@ export default function Account() {
 
   const runConfirm = async () => {
     setBusy(true);
-    await confirm.action();
+    try {
+      await confirm.action();
+    } catch (e) {
+      flash(e.message || "Something went wrong");
+    }
     setBusy(false);
     setConfirm(null);
   };

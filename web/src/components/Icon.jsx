@@ -8,7 +8,7 @@ import {
   TrendingDown, Calendar, ArrowLeftRight, Radio, Battery, Wrench, Home,
   Bell, Search, Info, Volume2, BarChart3, Download,
   Truck, Package, ShoppingCart, Store, Receipt, CreditCard, Minus, Crown,
-  ExternalLink,
+  ExternalLink, Phone,
 } from "lucide-react";
 
 // Maps the string icon names used in metrics.js / acoustic.js to components.
@@ -31,7 +31,7 @@ const ICONS = {
   search: Search, info: Info, volume: Volume2, chart: BarChart3,
   download: Download, truck: Truck, package: Package, cart: ShoppingCart,
   store: Store, receipt: Receipt, card: CreditCard, minus: Minus,
-  crown: Crown, external: ExternalLink,
+  crown: Crown, external: ExternalLink, phone: Phone,
 };
 
 export default function Icon({ name, size = 16, ...rest }) {

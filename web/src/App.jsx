@@ -5,6 +5,7 @@ import Sidebar from "./components/Sidebar";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Devices from "./pages/Devices";
+import Properties from "./pages/Properties";
 import Orders from "./pages/Orders";
 import Account from "./pages/Account";
 
@@ -36,6 +37,7 @@ export default function App() {
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/devices" element={<Devices />} />
+            <Route path="/properties" element={<Properties />} />
             <Route path="/orders" element={<Orders />} />
             <Route path="/account" element={<Account />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />

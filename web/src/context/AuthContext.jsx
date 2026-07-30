@@ -42,6 +42,16 @@ export function AuthProvider({ children }) {
   const signUp = (email, password) =>
     supabase.auth.signUp({ email, password });
 
+  // Redirects the browser to Google, then back to this same origin — the
+  // Supabase client picks up the session from the URL automatically
+  // (detectSessionInUrl: true in lib/supabase.js), which flips `session`
+  // above and swaps in the app shell. No callback route needed.
+  const signInWithGoogle = () =>
+    supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+
   const resetPassword = (email) =>
     supabase.auth.resetPasswordForEmail(email);
 
@@ -53,7 +63,7 @@ export function AuthProvider({ children }) {
   return (
     <AuthContext.Provider
       value={{
-        session, loading, signIn, signUp, signOut, resetPassword,
+        session, loading, signIn, signUp, signOut, resetPassword, signInWithGoogle,
         technicianAssignments, refreshTechnicianAssignments,
       }}
     >

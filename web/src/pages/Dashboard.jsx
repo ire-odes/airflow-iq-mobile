@@ -5,7 +5,9 @@ import MetricCard, { MetricCardSkeleton } from "../components/MetricCard";
 import TrendChart from "../components/TrendChart";
 import AcousticPanel from "../components/AcousticPanel";
 import FilterStatus from "../components/FilterStatus";
+import PriorityQueue from "../components/PriorityQueue";
 import ScopePicker from "../components/ScopePicker";
+import PropertySwitcher from "../components/PropertySwitcher";
 import { supabase } from "../lib/supabase";
 import { useScope } from "../context/ScopeContext";
 import { formatIntervalLabel, getTimeOfDay, timeAgo } from "../lib/format";
@@ -276,10 +278,13 @@ export default function Dashboard() {
 
   return (
     <>
-      <header className="topbar">
+      <header className="topbar topbar-gradient">
         <div className="topbar-titles">
           <div className="topbar-eyebrow">Good {getTimeOfDay()}</div>
-          <h1 className="topbar-title">Dashboard</h1>
+          <div className="row" style={{ gap: 12 }}>
+            <h1 className="topbar-title">Dashboard</h1>
+            <PropertySwitcher />
+          </div>
         </div>
         <div className="topbar-actions">
           {lastUpdated && (
@@ -303,6 +308,10 @@ export default function Dashboard() {
           </div>
         ) : (
           <>
+            <div style={{ marginBottom: 18 }}>
+              <PriorityQueue />
+            </div>
+
             {/* Range + window controls */}
             <div className="row wrap" style={{ gap: 12, marginBottom: 18 }}>
               <div className="pill-row">
@@ -381,26 +390,29 @@ export default function Dashboard() {
                     <TrendChart data={chartData} metric={metric} isLine={isLine} />
                   )}
 
-                  <div className="stat-strip" style={{ marginTop: 16, boxShadow: "none", background: "var(--inputBg)" }}>
-                    <div className="stat-cell">
-                      <div className="stat-num" style={{ color: "#45B7D1" }}>
-                        {chartStats.min != null ? `${chartStats.min.toFixed(1)}${metric.unit}` : "—"}
+                  <div className="chart-footer">
+                    <div className="chart-footer-stats">
+                      <div>
+                        <div className="chart-stat-label">Min</div>
+                        <div className="chart-stat-value">
+                          {chartStats.min != null ? `${chartStats.min.toFixed(1)}${metric.unit}` : "—"}
+                        </div>
                       </div>
-                      <div className="stat-lbl">Min</div>
-                    </div>
-                    <div className="stat-cell">
-                      <div className="stat-num" style={{ color: "#ef4444" }}>
-                        {chartStats.max != null ? `${chartStats.max.toFixed(1)}${metric.unit}` : "—"}
+                      <div>
+                        <div className="chart-stat-label">Max</div>
+                        <div className="chart-stat-value">
+                          {chartStats.max != null ? `${chartStats.max.toFixed(1)}${metric.unit}` : "—"}
+                        </div>
                       </div>
-                      <div className="stat-lbl">Max</div>
+                      <div>
+                        <div className="chart-stat-label">Last reading</div>
+                        <div className="chart-stat-value">{chartStats.lastTs ? timeAgo(chartStats.lastTs) : "—"}</div>
+                      </div>
                     </div>
-                    <div className="stat-cell">
-                      <div className="stat-num">{chartStats.lastTs ? timeAgo(chartStats.lastTs) : "—"}</div>
-                      <div className="stat-lbl">Last reading</div>
-                    </div>
-                    <div className="stat-cell">
-                      <div className="stat-num">{scopedDeviceIds.length}</div>
-                      <div className="stat-lbl">{scopedDeviceIds.length === 1 ? "Device" : "Devices"}</div>
+                    <div className="chart-legend">
+                      <span className="legend-item"><span className="legend-dot" style={{ background: metric.color }} />Normal</span>
+                      <span className="legend-item"><span className="legend-dot" style={{ background: "#ef4444" }} />High</span>
+                      <span className="legend-item"><span className="legend-dot" style={{ background: "#45B7D1" }} />Low</span>
                     </div>
                   </div>
                 </section>
@@ -449,8 +461,11 @@ export default function Dashboard() {
 
               {/* ── Right column ────────────────────────────────────────── */}
               <div className="col" style={{ gap: 18 }}>
+                {/* Acoustic data is inherently per-device — no arbitrary
+                    fallback to "whichever device is first in scope" when
+                    viewing an aggregate; the panel itself prompts to pick one. */}
                 <AcousticPanel
-                  deviceId={selectedDevice?.id || scopedDeviceIds[0]}
+                  deviceMac={selectedDevice?.device_mac}
                   deviceName={selectedDevice?.name}
                 />
               </div>

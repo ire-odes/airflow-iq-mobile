@@ -114,6 +114,25 @@ Two paths, both needing the Resend API key:
    limit under Authentication → Rate Limits (the default 2/hour only applies
    to Supabase's built-in mailer).
 
+## Google Sign-In (web app)
+
+The web app's Login page now has a "Continue with Google" button — but it
+won't work until the Google provider is enabled in Supabase, which needs a
+Google Cloud OAuth client:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials),
+   create an **OAuth 2.0 Client ID** (Application type: **Web application**).
+2. Add this **Authorized redirect URI** exactly:
+   `https://hniplnaohvcbtmelatnz.supabase.co/auth/v1/callback`
+3. Copy the generated **Client ID** and **Client Secret**.
+4. Supabase dashboard → **Authentication → Providers → Google** → toggle it
+   on, paste the Client ID and Secret, save.
+
+That's it — no code or redeploy needed on your end; Supabase handles the
+OAuth exchange. The web app's `redirectTo` is the page origin itself
+(`http://localhost:5173` in dev), so it bounces straight back into the app
+and signs the user in, same as email/password.
+
 ## What changed in the app (no action needed)
 
 - New **Orders** tab: catalog, cart, Stripe Checkout, order history.

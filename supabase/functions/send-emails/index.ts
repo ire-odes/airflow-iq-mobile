@@ -44,6 +44,14 @@ function bodyLines(template: string, p: any): string[] {
         `Your order was delivered${p.delivered_at ? ` on ${when(p.delivered_at)}` : ""}. Enjoy!`,
         `If anything's wrong with your order, just reply to this email.`,
       ];
+    case "tenant_filter_due":
+      return [
+        `This is a reminder that the HVAC filter for <b>${p.device_name ?? "your unit"}</b>${p.hvac_location ? ` (${p.hvac_location})` : ""} is due for replacement.`,
+        p.days_since != null && p.interval_days != null
+          ? `It's been installed for <b>${p.days_since} days</b> (recommended interval: ${p.interval_days} days).`
+          : "",
+        `Please reach out to your property manager to schedule a replacement, or replace it yourself if that's part of your lease arrangement.`,
+      ];
     default:
       // Unknown template — send subject + payload fields rather than dropping it
       return Object.entries(p ?? {}).map(([k, v]) => `<b>${k}:</b> ${String(v)}`);

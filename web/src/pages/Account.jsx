@@ -7,13 +7,12 @@ import { useTheme } from "../context/ThemeContext";
 import { APP_VERSION } from "../lib/config";
 import {
   SUBSCRIPTION_PLANS, fetchSubscription, isSubscriptionActive,
-  openBillingPortal, startSubscriptionCheckout,
+  openBillingPortal, startSubscriptionCheckout, deleteAccount,
 } from "../lib/billing";
 
 // Same storage key and value shape the mobile app's notifications module uses,
 // so a threshold set here reads back the same way conceptually.
 const THRESHOLDS_KEY = "notif_thresholds";
-const DUCT_AREA_KEY = "duct_area";
 
 const THRESHOLDS = [
   { key: "temp_c",      label: "Temperature", unit: "°F",   icon: "thermometer", color: "#FF6B6B", defaultMin: 59,  defaultMax: 86 },
@@ -38,7 +37,6 @@ export default function Account() {
   const [savingName, setSavingName] = useState(false);
 
   const [thresholds, setThresholds] = useState(loadThresholds);
-  const [ductArea, setDuctArea] = useState(() => localStorage.getItem(DUCT_AREA_KEY) || "0.1");
 
   const [myTechnician, setMyTechnician] = useState(null);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -51,6 +49,7 @@ export default function Account() {
   const [subError, setSubError] = useState(null);
 
   const [passwordOpen, setPasswordOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [confirm, setConfirm] = useState(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
@@ -102,12 +101,6 @@ export default function Account() {
       localStorage.setItem(THRESHOLDS_KEY, JSON.stringify(next));
       return next;
     });
-  };
-
-  const saveDuctArea = (value) => {
-    setDuctArea(value);
-    const n = parseFloat(value);
-    if (!isNaN(n) && n > 0) localStorage.setItem(DUCT_AREA_KEY, String(n));
   };
 
   const inviteTechnician = async () => {
@@ -165,7 +158,7 @@ export default function Account() {
 
   return (
     <>
-      <header className="topbar">
+      <header className="topbar topbar-gradient">
         <div className="topbar-titles">
           <div className="topbar-eyebrow">Settings</div>
           <h1 className="topbar-title">Account</h1>
@@ -263,31 +256,6 @@ export default function Account() {
               <div className="list-label" style={{ marginTop: 2 }}>{isDark ? "On" : "Off"}</div>
             </div>
             <button className={`switch${isDark ? " on" : ""}`} onClick={toggleTheme} aria-label="Toggle dark mode" />
-          </div>
-        </div>
-
-        {/* HVAC config */}
-        <div className="section-head">
-          <div>
-            <h2 className="section-title">HVAC Configuration</h2>
-            <p className="section-sub">Used for the derived airflow calculations on the dashboard.</p>
-          </div>
-        </div>
-        <div className="card">
-          <div className="list-row">
-            <div className="list-icon"><Icon name="move-right" size={17} /></div>
-            <div className="grow">
-              <div className="list-value">Duct cross-section area</div>
-              <div className="list-label" style={{ marginTop: 2 }}>
-                Drives volumetric airflow, mass airflow and sensible heat rate
-              </div>
-            </div>
-            <input
-              className="input input-sm" style={{ width: 96, textAlign: "center", fontWeight: 700 }}
-              value={ductArea} inputMode="decimal"
-              onChange={(e) => saveDuctArea(e.target.value)}
-            />
-            <span className="hint">m²</span>
           </div>
         </div>
 
@@ -420,12 +388,35 @@ export default function Account() {
           </>
         )}
 
+        {/* Danger zone */}
+        <div className="section-head"><h2 className="section-title">Danger Zone</h2></div>
+        <div className="card" style={{ borderColor: "#ef444455" }}>
+          <button className="list-row" style={{ width: "100%", textAlign: "left" }} onClick={() => setDeleteOpen(true)}>
+            <div className="list-icon" style={{ background: "#ef44441f", color: "#ef4444" }}>
+              <Icon name="trash" size={17} />
+            </div>
+            <div className="grow">
+              <div className="list-value" style={{ color: "#ef4444" }}>Delete account</div>
+              <div className="list-label" style={{ marginTop: 2 }}>
+                Permanently delete your account and cancel any subscription
+              </div>
+            </div>
+            <Icon name="chevron-right" size={17} style={{ color: "var(--subtext)" }} />
+          </button>
+        </div>
+
         <p className="hint" style={{ textAlign: "center", marginTop: 30 }}>
           AirFlow IQ Desktop v{APP_VERSION}
         </p>
       </div>
 
       <ChangePasswordModal open={passwordOpen} onClose={() => setPasswordOpen(false)} onDone={() => flash("Password changed")} />
+
+      <DeleteAccountModal
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        onDeleted={signOut}
+      />
 
       <ConfirmModal
         open={!!confirm}
@@ -572,6 +563,63 @@ function ChangePasswordModal({ open, onClose, onDone }) {
         <input className="input" type="password" value={confirmPass} autoComplete="new-password"
           onChange={(e) => setConfirmPass(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") submit(); }} />
+      </div>
+    </Modal>
+  );
+}
+
+function DeleteAccountModal({ open, onClose, onDeleted }) {
+  const [confirmText, setConfirmText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => { if (open) { setConfirmText(""); setError(null); } }, [open]);
+
+  const canDelete = confirmText.trim().toUpperCase() === "DELETE";
+
+  const submit = async () => {
+    if (!canDelete) return;
+    setBusy(true); setError(null);
+    try {
+      await deleteAccount();
+      onDeleted();
+    } catch (e) {
+      setError(e.message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Delete Account"
+      subtitle="This cannot be undone"
+      icon="warning"
+      footer={
+        <>
+          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn btn-danger" onClick={submit} disabled={busy || !canDelete}>
+            {busy ? <span className="spinner" /> : "Delete My Account"}
+          </button>
+        </>
+      }
+    >
+      {error && <div className="auth-error">{error}</div>}
+      <p className="hint" style={{ fontSize: 13.5 }}>
+        This permanently deletes your login. Any devices you own are unclaimed (not
+        destroyed — the hardware and its history stay put, and it can be claimed again
+        later), any properties you own are deleted, and any active subscription is
+        canceled immediately.
+      </p>
+      <div className="field">
+        <label className="field-label">TYPE "DELETE" TO CONFIRM</label>
+        <input
+          className="input" value={confirmText} autoFocus
+          onChange={(e) => setConfirmText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && canDelete) submit(); }}
+          placeholder="DELETE"
+        />
       </div>
     </Modal>
   );

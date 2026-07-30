@@ -81,7 +81,7 @@ export default function Orders() {
 
   return (
     <>
-      <header className="topbar">
+      <header className="topbar topbar-gradient">
         <div className="topbar-titles">
           <div className="topbar-eyebrow">Shop</div>
           <h1 className="topbar-title">Orders</h1>

@@ -55,6 +55,15 @@ p { margin: 0; }
 .sidebar-brand-name { font-size: 15px; font-weight: 800; letter-spacing: -0.3px; }
 .sidebar-brand-sub { font-size: 11px; color: var(--subtext); font-weight: 500; }
 
+.property-switcher {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 14px; border-radius: 999px; border: none;
+  background: #fff; color: #0b2f66; font-size: 13px; font-weight: 700;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  transition: background 0.12s ease;
+}
+.property-switcher:hover { background: #f2f6ff; }
+
 .sidebar-label {
   font-size: 10px; font-weight: 800; letter-spacing: 1px;
   color: var(--subtext); padding: 14px 12px 6px; text-transform: uppercase;
@@ -103,6 +112,48 @@ p { margin: 0; }
 .topbar-eyebrow { font-size: 12px; color: var(--subtext); font-weight: 600; }
 .topbar-title { font-size: 22px; font-weight: 800; }
 .topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+/* Dashboard-only: full-width brand gradient across the topbar, so the
+   property/device pickers read as white chips floating on it rather than
+   theme-following buttons. */
+.topbar-gradient {
+  background: linear-gradient(120deg, #0b2f66, #007BFF);
+  backdrop-filter: none;
+  border-bottom: none;
+}
+.topbar-gradient .topbar-eyebrow { color: rgba(255, 255, 255, 0.78); }
+.topbar-gradient .topbar-title { color: #fff; }
+.topbar-gradient .hint { color: rgba(255, 255, 255, 0.78); }
+.topbar-gradient .btn {
+  background: rgba(255, 255, 255, 0.16); border-color: rgba(255, 255, 255, 0.32); color: #fff;
+}
+.topbar-gradient .btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.26); }
+.topbar-gradient .btn:disabled { opacity: 0.55; }
+.topbar-gradient .btn-icon {
+  background: rgba(255, 255, 255, 0.16); border-color: transparent; color: #fff;
+}
+.topbar-gradient .btn-icon:hover { background: rgba(255, 255, 255, 0.26); }
+/* Primary action needs to invert — the accent colour disappears against its
+   own gradient otherwise. */
+.topbar-gradient .btn-primary {
+  background: #fff; border-color: #fff; color: #0b2f66;
+}
+.topbar-gradient .btn-primary:hover:not(:disabled) { background: #f0f4fa; }
+.topbar-gradient .btn-danger {
+  background: rgba(255, 255, 255, 0.16); border-color: rgba(255, 255, 255, 0.32); color: #fecaca;
+}
+.topbar-gradient .btn-danger:hover:not(:disabled) { background: rgba(255, 255, 255, 0.26); }
+
+/* White pill dropdown triggers (property + device pickers) that sit on the
+   gradient topbar — fixed colours, not theme-following, since the pill's
+   own background no longer changes with light/dark mode. */
+.gradient-pill-trigger {
+  display: flex; align-items: center;
+  background: #fff; border: none; border-radius: 14px;
+  color: #0b2f66;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+.gradient-pill-trigger:hover { background: #f2f6ff; }
 
 .page { padding: 26px 32px 56px; max-width: 1560px; }
 
@@ -278,10 +329,9 @@ p { margin: 0; }
 }
 
 /* ── Metric card ───────────────────────────────────────────────────────────────
-   Neutral surface, not a colour block. The metric's colour survives only as a
-   thin top rule, the icon chip and the trend arrow — the reading itself carries
-   the emphasis through type weight and scale. Reads as instrumentation rather
-   than decoration, and keeps a grid of eight cards calm instead of garish.     */
+   Neutral surface — the metric's colour survives only as a small accent (a
+   thin top rule and the icon chip), not a colour block. Keeps a grid of
+   eight cards calm and lets the numbers read in plain, high-contrast text.  */
 .metric-card {
   position: relative; overflow: hidden; text-align: left;
   min-height: 152px; display: flex; flex-direction: column;
@@ -292,7 +342,7 @@ p { margin: 0; }
   box-shadow: var(--shadow);
   transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
 }
-/* Colour identity: a 3px rule across the top edge. */
+/* Colour identity: a 3px rule across the top edge — the "small accent". */
 .metric-card::before {
   content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
   background: var(--metric-color);
@@ -397,6 +447,50 @@ p { margin: 0; }
 .progress-track { height: 6px; border-radius: 3px; overflow: hidden; }
 .progress-fill { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
 
+/* ── Needs Attention banner ─────────────────────────────────────────────────
+   One line, reads as a plain warning — same treatment as every other alert
+   banner in the app (e.g. the "filter due soon" strip on Devices), not a
+   bespoke gradient card.                                                    */
+.needs-attention-banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px; border-radius: 0;
+  background: #f973161a; border: 1px solid #f9731655; color: #f97316;
+  font-size: 13px; font-weight: 600;
+}
+.needs-attention-banner > span { flex: 1; min-width: 0; }
+.needs-attention-icon {
+  width: 22px; height: 22px; border-radius: 7px; flex-shrink: 0;
+  background: #f9731626;
+  display: grid; place-items: center;
+}
+.needs-attention-viewall {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: auto; padding: 5px 12px; border-radius: 999px; flex-shrink: 0;
+  background: #f9731626;
+  font-size: 12px; font-weight: 700; color: #f97316;
+  transition: background 0.12s ease;
+}
+.needs-attention-viewall:hover { background: #f9731638; }
+
+/* ── Chart footer (min/max/last reading + anomaly legend) ─────────────────── */
+.chart-footer {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  flex-wrap: wrap; gap: 14px;
+  margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--divider);
+}
+.chart-footer-stats { display: flex; gap: 26px; flex-wrap: wrap; }
+.chart-stat-label {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.4px;
+  text-transform: uppercase; color: var(--subtext);
+}
+.chart-stat-value {
+  font-size: 14px; font-weight: 800; margin-top: 3px; color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.chart-legend { display: flex; gap: 14px; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--subtext); }
+.legend-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+
 .stat-strip {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   background: var(--card); border: 1px solid var(--border);
@@ -418,7 +512,7 @@ p { margin: 0; }
 
 .banner {
   display: flex; align-items: center; gap: 10px;
-  padding: 12px 15px; border-radius: 13px; border: 1px solid;
+  padding: 12px 15px; border-radius: 0; border: 1px solid;
   font-size: 13px; font-weight: 600;
 }
 
@@ -473,6 +567,13 @@ p { margin: 0; }
 }
 .link-btn { color: var(--accent); font-weight: 700; font-size: 13.5px; }
 .link-btn:hover { text-decoration: underline; }
+
+.auth-divider {
+  display: flex; align-items: center; gap: 12px;
+  color: var(--subtext); font-size: 11.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.4px;
+}
+.auth-divider-line { flex: 1; height: 1px; background: var(--divider); }
 
 /* Recharts tooltip */
 .chart-tip {

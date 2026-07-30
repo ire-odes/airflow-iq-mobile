@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { NavLink } from "react-router-dom";
 import Icon from "../components/Icon";
 import Modal, { ConfirmModal } from "../components/Modal";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../context/AuthContext";
-import { useScope } from "../context/ScopeContext";
+import { useScope, UNASSIGNED_ID } from "../context/ScopeContext";
 import { getFilterProgress, getOnlineStatus } from "../lib/metrics";
 import { timeAgo, wakeLabel } from "../lib/format";
 import {
@@ -13,17 +14,18 @@ import {
 } from "../lib/config";
 
 export default function Devices() {
-  const { session } = useAuth();
   const { grouped, devices, properties, schemaReady, reload, loading } = useScope();
-  const userId = session?.user?.id;
+
+  // Split so a technician's serviced properties render as their own section,
+  // never mixed in with the properties/devices you actually own.
+  const ownedGroups = grouped.filter((g) => g.property._isOwner);
+  const technicianGroups = grouped.filter((g) => !g.property._isOwner);
 
   const [stats, setStats] = useState({});
   const [installDates, setInstallDates] = useState({});
 
   const [claimOpen, setClaimOpen] = useState(false);
   const [editingDevice, setEditingDevice] = useState(null);
-  const [editingProperty, setEditingProperty] = useState(null);
-  const [propertyModalOpen, setPropertyModalOpen] = useState(false);
   const [confirm, setConfirm] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -72,18 +74,6 @@ export default function Devices() {
     refresh();
   };
 
-  const saveProperty = async (form) => {
-    setBusy(true);
-    const { error } = editingProperty?.id
-      ? await supabase.from("properties").update(form).eq("id", editingProperty.id)
-      : await supabase.from("properties").insert({ ...form, owner_id: userId });
-    setBusy(false);
-    if (error) return alert(`Failed to save property: ${error.message}`);
-    setPropertyModalOpen(false);
-    setEditingProperty(null);
-    reload();
-  };
-
   const removeDevice = (device) => setConfirm({
     title: "Remove device",
     message: `Remove "${device.name || device.device_mac}" from your account? Its recorded data is kept, and the device can be claimed again later.`,
@@ -92,17 +82,6 @@ export default function Devices() {
     action: async () => {
       await supabase.from("devices").update({ owner_id: null }).eq("id", device.id);
       refresh();
-    },
-  });
-
-  const deleteProperty = (property) => setConfirm({
-    title: "Delete property",
-    message: `Delete "${property.name}"? Its devices are kept and moved to Unassigned.`,
-    confirmLabel: "Delete",
-    danger: true,
-    action: async () => {
-      await supabase.from("properties").delete().eq("id", property.id);
-      reload();
     },
   });
 
@@ -125,20 +104,15 @@ export default function Devices() {
 
   return (
     <>
-      <header className="topbar">
+      <header className="topbar topbar-gradient">
         <div className="topbar-titles">
           <div className="topbar-eyebrow">Manage</div>
           <h1 className="topbar-title">Devices &amp; Properties</h1>
         </div>
         <div className="topbar-actions">
-          <button
-            className="btn"
-            onClick={() => { setEditingProperty(null); setPropertyModalOpen(true); }}
-            disabled={!schemaReady}
-            title={schemaReady ? "Add a property" : "Run the properties migration first"}
-          >
-            <Icon name="building" size={15} /> Add Property
-          </button>
+          <NavLink to="/properties" className="btn">
+            <Icon name="building" size={15} /> Manage Properties
+          </NavLink>
           <button className="btn btn-primary" onClick={() => setClaimOpen(true)}>
             <Icon name="plus" size={15} /> Claim Device
           </button>
@@ -165,7 +139,7 @@ export default function Devices() {
             <div className="stat-num">{counts.total}</div><div className="stat-lbl">Total devices</div>
           </div>
           <div className="stat-cell">
-            <div className="stat-num" style={{ color: "#22c55e" }}>{counts.online}</div><div className="stat-lbl">Online</div>
+            <div className="stat-num">{counts.online}</div><div className="stat-lbl">Online</div>
           </div>
           <div className="stat-cell">
             <div className="stat-num">{counts.offline}</div><div className="stat-lbl">Offline</div>
@@ -202,68 +176,41 @@ export default function Devices() {
             </button>
           </div>
         ) : (
-          grouped.map(({ property, devices: propDevices }) => (
-            <div className="property-group" key={property.id}>
-              <div className="property-head">
-                <div className="property-icon">
-                  <Icon name={property._virtual ? "device" : "building"} size={17} />
-                </div>
-                <div className="grow">
-                  <div className="row gap-sm">
-                    <h3 style={{ fontSize: 15.5, fontWeight: 800 }}>{property.name}</h3>
-                    <span className="badge" style={{ background: "var(--inputBg)", color: "var(--subtext)" }}>
-                      {propDevices.length} {propDevices.length === 1 ? "device" : "devices"}
-                    </span>
-                    {!property._isOwner && !property._virtual && (
-                      <span className="badge" style={{ background: "#0284c71f", color: "#0284c7" }}>
-                        <Icon name="wrench" size={10} /> Technician
-                      </span>
-                    )}
-                  </div>
-                  {[property.address, property.city, property.region].filter(Boolean).length > 0 && (
-                    <div className="meta-row" style={{ marginTop: 3 }}>
-                      <Icon name="location" size={12} />
-                      {[property.address, property.city, property.region].filter(Boolean).join(", ")}
-                    </div>
-                  )}
-                  {property._virtual && (
-                    <p className="hint" style={{ marginTop: 3 }}>
-                      Devices not yet assigned to a property. Edit a device to place it.
-                    </p>
-                  )}
-                </div>
+          <>
+            {ownedGroups.map(({ property, devices: propDevices }) => (
+              <PropertyGroupCard
+                key={property.id}
+                property={property}
+                propDevices={propDevices}
+                stats={stats}
+                installDates={installDates}
+                onEdit={setEditingDevice}
+                onRemove={removeDevice}
+              />
+            ))}
 
-                {!property._virtual && property._isOwner && (
-                  <div className="row gap-sm">
-                    <button className="btn btn-sm" onClick={() => { setEditingProperty(property); setPropertyModalOpen(true); }}>
-                      <Icon name="pencil" size={13} /> Edit
-                    </button>
-                    <button className="btn btn-sm btn-danger" onClick={() => deleteProperty(property)}>
-                      <Icon name="trash" size={13} />
-                    </button>
+            {technicianGroups.length > 0 && (
+              <>
+                <div className="section-head">
+                  <div>
+                    <h2 className="section-title">Technician Devices</h2>
+                    <p className="section-sub">You can edit the name and location of these devices.</p>
                   </div>
-                )}
-              </div>
-
-              {propDevices.length === 0 ? (
-                <p className="hint" style={{ padding: "4px 6px 10px" }}>No devices in this property yet.</p>
-              ) : (
-                <div className="device-grid">
-                  {propDevices.map((d) => (
-                    <DeviceCard
-                      key={d.id}
-                      device={d}
-                      lastSeen={stats[d.id]?.lastSeen}
-                      latest={stats[d.id]?.latest}
-                      installedAt={installDates[d.id]}
-                      onEdit={() => setEditingDevice(d)}
-                      onRemove={() => removeDevice(d)}
-                    />
-                  ))}
                 </div>
-              )}
-            </div>
-          ))
+                {technicianGroups.map(({ property, devices: propDevices }) => (
+                  <PropertyGroupCard
+                    key={property.id}
+                    property={property}
+                    propDevices={propDevices}
+                    stats={stats}
+                    installDates={installDates}
+                    onEdit={setEditingDevice}
+                    onRemove={removeDevice}
+                  />
+                ))}
+              </>
+            )}
+          </>
         )}
       </div>
 
@@ -278,14 +225,6 @@ export default function Devices() {
         schemaReady={schemaReady}
       />
 
-      <PropertyModal
-        open={propertyModalOpen}
-        property={editingProperty}
-        onClose={() => { setPropertyModalOpen(false); setEditingProperty(null); }}
-        onSave={saveProperty}
-        busy={busy}
-      />
-
       <ConfirmModal
         open={!!confirm}
         onClose={() => setConfirm(null)}
@@ -297,6 +236,56 @@ export default function Devices() {
         danger={confirm?.danger}
       />
     </>
+  );
+}
+
+// ── One property and its devices ─────────────────────────────────────────────
+function PropertyGroupCard({ property, propDevices, stats, installDates, onEdit, onRemove }) {
+  return (
+    <div className="property-group">
+      <div className="property-head">
+        <div className="property-icon">
+          <Icon name={property._virtual ? "device" : "building"} size={17} />
+        </div>
+        <div className="grow">
+          <div className="row gap-sm">
+            <h3 style={{ fontSize: 15.5, fontWeight: 800 }}>{property.name}</h3>
+            <span className="badge" style={{ background: "var(--inputBg)", color: "var(--subtext)" }}>
+              {propDevices.length} {propDevices.length === 1 ? "device" : "devices"}
+            </span>
+          </div>
+          {[property.address, property.city, property.region].filter(Boolean).length > 0 && (
+            <div className="meta-row" style={{ marginTop: 3 }}>
+              <Icon name="location" size={12} />
+              {[property.address, property.city, property.region].filter(Boolean).join(", ")}
+            </div>
+          )}
+          {property._virtual && property._isOwner && (
+            <p className="hint" style={{ marginTop: 3 }}>
+              Devices not yet assigned to a property. Edit a device to place it.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {propDevices.length === 0 ? (
+        <p className="hint" style={{ padding: "4px 6px 10px" }}>No devices in this property yet.</p>
+      ) : (
+        <div className="device-grid">
+          {propDevices.map((d) => (
+            <DeviceCard
+              key={d.id}
+              device={d}
+              lastSeen={stats[d.id]?.lastSeen}
+              latest={stats[d.id]?.latest}
+              installedAt={installDates[d.id]}
+              onEdit={() => onEdit(d)}
+              onRemove={() => onRemove(d)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -390,9 +379,16 @@ function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove })
 // ── Claim a device by MAC ────────────────────────────────────────────────────
 function ClaimDeviceModal({ open, onClose, onClaimed }) {
   const { session } = useAuth();
+  const { selectedPropertyId, selectedProperty } = useScope();
   const [mac, setMac] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+
+  // The property currently scoped in the sidebar switcher — a claim made
+  // while a specific property is selected joins that property automatically.
+  const targetPropertyId = selectedPropertyId && selectedPropertyId !== UNASSIGNED_ID
+    ? selectedPropertyId
+    : null;
 
   useEffect(() => { if (open) { setMac(""); setError(null); } }, [open]);
 
@@ -423,7 +419,9 @@ function ClaimDeviceModal({ open, onClose, onClaimed }) {
     }
 
     const { error } = await supabase
-      .from("devices").update({ owner_id: session?.user?.id }).eq("id", data.id);
+      .from("devices")
+      .update({ owner_id: session?.user?.id, property_id: targetPropertyId })
+      .eq("id", data.id);
     setBusy(false);
     if (error) return setError(error.message);
     onClaimed();
@@ -461,6 +459,15 @@ function ClaimDeviceModal({ open, onClose, onClaimed }) {
         />
       </div>
 
+      <div className="banner" style={{ background: "var(--inputBg)", borderColor: "var(--border)" }}>
+        <Icon name="building" size={15} style={{ color: "var(--subtext)" }} />
+        <span>
+          {targetPropertyId
+            ? <>Will be added to <strong>{selectedProperty?.name}</strong></>
+            : <>Will be <strong>unassigned</strong> — pick a property in the sidebar first to auto-assign</>}
+        </span>
+      </div>
+
       <p className="hint">
         On mobile you can scan the QR code instead — the desktop app uses manual entry.
       </p>
@@ -491,7 +498,8 @@ function EditDeviceModal({ device, properties, onClose, onSave, busy, schemaRead
       filter_interval_days: device.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS,
       wake_interval_seconds: device.wake_interval_seconds || DEFAULT_WAKE_INTERVAL_SECONDS,
       tenant_email: device.tenant_email || "",
-      tenantEnabled: !!device.tenant_email,
+      tenant_phone: device.tenant_phone || "",
+      tenantEnabled: !!(device.tenant_email || device.tenant_phone),
     });
   }, [device]);
 
@@ -528,6 +536,7 @@ function EditDeviceModal({ device, properties, onClose, onSave, busy, schemaRead
           filter_interval_days: interval,
           wake_interval_seconds: wake,
           tenant_email: form.tenantEnabled ? form.tenant_email.trim().toLowerCase() : null,
+          tenant_phone: form.tenantEnabled ? form.tenant_phone.trim() : null,
         }
       : { name: form.name.trim(), hvac_location: form.hvac_location.trim() };
 
@@ -574,7 +583,7 @@ function EditDeviceModal({ device, properties, onClose, onSave, busy, schemaRead
               disabled={!schemaReady}
               onChange={(e) => set({ property_id: e.target.value })}
             >
-              <option value="">Unassigned</option>
+              <option value="">Unassigned Property</option>
               {properties.filter((p) => p._isOwner).map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
@@ -635,8 +644,8 @@ function EditDeviceModal({ device, properties, onClose, onSave, busy, schemaRead
             <label className="field-label">TENANT NOTIFICATIONS</label>
             <div className="row" style={{ background: "var(--inputBg)", borderRadius: 12, padding: "12px 14px" }}>
               <div className="grow">
-                <div style={{ fontSize: 14, fontWeight: 600 }}>Notify tenant by email</div>
-                <p className="hint">Tenant is emailed when the filter needs changing.</p>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>Notify tenant</div>
+                <p className="hint">Tenant is emailed and/or texted when the filter needs changing.</p>
               </div>
               <button
                 className={`switch${form.tenantEnabled ? " on" : ""}`}
@@ -645,11 +654,18 @@ function EditDeviceModal({ device, properties, onClose, onSave, busy, schemaRead
               />
             </div>
             {form.tenantEnabled && (
-              <input
-                className="input" type="email" placeholder="tenant@example.com"
-                value={form.tenant_email} style={{ marginTop: 8 }}
-                onChange={(e) => set({ tenant_email: e.target.value })}
-              />
+              <>
+                <input
+                  className="input" type="email" placeholder="tenant@example.com"
+                  value={form.tenant_email} style={{ marginTop: 8 }}
+                  onChange={(e) => set({ tenant_email: e.target.value })}
+                />
+                <input
+                  className="input" type="tel" placeholder="+1 555 123 4567 (optional, for SMS)"
+                  value={form.tenant_phone} style={{ marginTop: 8 }}
+                  onChange={(e) => set({ tenant_phone: e.target.value })}
+                />
+              </>
             )}
           </div>
         </>
@@ -660,80 +676,6 @@ function EditDeviceModal({ device, properties, onClose, onSave, busy, schemaRead
           You have technician access to this device — you can update its name and location only.
         </p>
       )}
-    </Modal>
-  );
-}
-
-// ── Create / edit a property ─────────────────────────────────────────────────
-function PropertyModal({ open, property, onClose, onSave, busy }) {
-  const [form, setForm] = useState({ name: "", address: "", city: "", region: "" });
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    if (!open) return;
-    setError(null);
-    setForm({
-      name: property?.name || "",
-      address: property?.address || "",
-      city: property?.city || "",
-      region: property?.region || "",
-    });
-  }, [open, property]);
-
-  const set = (patch) => setForm((f) => ({ ...f, ...patch }));
-
-  const submit = () => {
-    if (!form.name.trim()) return setError("Property name is required");
-    onSave({
-      name: form.name.trim(),
-      address: form.address.trim() || null,
-      city: form.city.trim() || null,
-      region: form.region.trim() || null,
-    });
-  };
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={property ? "Edit Property" : "Add Property"}
-      subtitle="A building or site that groups your devices"
-      icon="building"
-      footer={
-        <>
-          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="btn btn-primary" onClick={submit} disabled={busy}>
-            {busy ? <span className="spinner" /> : property ? "Save Changes" : "Create Property"}
-          </button>
-        </>
-      }
-    >
-      {error && <div className="auth-error">{error}</div>}
-
-      <div className="field">
-        <label className="field-label">PROPERTY NAME</label>
-        <input className="input" value={form.name} autoFocus placeholder="e.g. Maple Court Apartments"
-          onChange={(e) => set({ name: e.target.value })} />
-      </div>
-
-      <div className="field">
-        <label className="field-label">STREET ADDRESS</label>
-        <input className="input" value={form.address} placeholder="e.g. 128 Maple Street"
-          onChange={(e) => set({ address: e.target.value })} />
-      </div>
-
-      <div className="row gap-sm">
-        <div className="field grow">
-          <label className="field-label">CITY</label>
-          <input className="input" value={form.city} placeholder="e.g. Austin"
-            onChange={(e) => set({ city: e.target.value })} />
-        </div>
-        <div className="field grow">
-          <label className="field-label">STATE / REGION</label>
-          <input className="input" value={form.region} placeholder="e.g. TX"
-            onChange={(e) => set({ region: e.target.value })} />
-        </div>
-      </div>
     </Modal>
   );
 }

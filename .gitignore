@@ -34,6 +34,12 @@ yarn-error.*
 .env
 .env*.local
 
+# local Claude Code tooling (machine-specific paths, not portable)
+.claude/
+
+# Supabase CLI cache
+supabase/.temp/
+
 # typescript
 *.tsbuildinfo
 

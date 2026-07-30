@@ -136,6 +136,16 @@ export function effectiveStatus(order) {
   return "pending"; // draft orders awaiting checkout
 }
 
+// Deletes the current user's account (see supabase/functions/delete-account).
+// Cancels any active subscription, unclaims owned devices, and either fully
+// deletes the account or — if it has order history that can't be deleted
+// for financial record-keeping reasons — scrubs personal data and
+// permanently disables login instead. Either way the caller should sign out
+// immediately after this resolves.
+export async function deleteAccount() {
+  return invokeBilling("delete-account", {});
+}
+
 export const ORDER_STATUS = {
   pending:   { color: "#f59e0b", icon: "clock",   label: "Awaiting payment" },
   paid:      { color: "#22c55e", icon: "success", label: "Paid" },

@@ -5,11 +5,12 @@ import { formatSeconds, timeAgo, formatTimestamp } from "../lib/format";
 import { getLatestRecording, computePeaks, normalizeMfcc } from "../lib/audioRecordings";
 
 // ============================================================================
-// Acoustic Data — real recordings from audio_logs / hvac-recordings storage.
-// No ML classification pipeline exists yet (no verdict, no confidence, no
-// model) — this deliberately shows "not yet classified" rather than
-// fabricating one. See lib/audioRecordings.js for the data shape and the
-// WiFi-audio vs. LoRaWAN-MFCC split.
+// Acoustic Data — real recordings from audio_logs / hvac-recordings storage,
+// paired with real classifier output from filter_ml_readings when a device
+// has been scored (a separate pipeline — not this repo — writes those rows).
+// Devices with no reading yet show "not yet classified", never a guess.
+// See lib/audioRecordings.js for the data shape and the WiFi-audio vs.
+// LoRaWAN-MFCC split.
 // ============================================================================
 
 const WAVE_BINS = 190;
@@ -186,6 +187,14 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
     [recording]
   );
 
+  const classification = recording?.classification || null;
+  const isDirty = classification?.decision === "dirty";
+  const confidencePct = classification?.classifier_confidence != null
+    ? Math.round(classification.classifier_confidence * 100)
+    : null;
+  const hasDisagreement = !!classification?.disagreement_flag
+    && !["none", "false", "no"].includes(String(classification.disagreement_flag).toLowerCase());
+
   return (
     <section className="card card-pad" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div className="row" style={{ alignItems: "flex-start" }}>
@@ -198,11 +207,36 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
           </p>
         </div>
         {recording && (
-          <span className="badge" style={{ background: "#6366f11f", color: "#6366f1" }}>
-            <Icon name="info" size={11} /> Not yet classified
-          </span>
+          classification ? (
+            <span className="badge" style={{ background: isDirty ? "#ef44441f" : "#22c55e1f", color: isDirty ? "#ef4444" : "#22c55e" }}>
+              <Icon name={isDirty ? "warning" : "success"} size={11} />
+              {isDirty ? "Filter Dirty" : "Filter Clean"} · {confidencePct}%
+            </span>
+          ) : (
+            <span className="badge" style={{ background: "#6366f11f", color: "#6366f1" }}>
+              <Icon name="info" size={11} /> Not yet classified
+            </span>
+          )
         )}
       </div>
+
+      {classification && (
+        <div
+          className="banner"
+          style={{
+            background: isDirty ? "#ef44441a" : "#22c55e1a",
+            borderColor: isDirty ? "#ef444455" : "#22c55e55",
+            color: isDirty ? "#ef4444" : "#16a34a",
+          }}
+        >
+          <Icon name={isDirty ? "warning" : "success"} size={16} />
+          <span className="grow">
+            <strong>{classification.classifier_label}</strong> — {confidencePct}% confidence
+            {hasDisagreement && <> · <strong>flagged:</strong> {classification.disagreement_flag}</>}
+          </span>
+          <span className="hint" style={{ fontSize: 11 }}>{timeAgo(classification.recorded_at)}</span>
+        </div>
+      )}
 
       {!deviceMac ? (
         <div className="empty" style={{ padding: "28px 20px" }}>

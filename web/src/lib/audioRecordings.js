@@ -13,16 +13,32 @@
 //     (mel-frequency cepstral coefficient) features instead — there is no
 //     playable audio for these, only the numeric feature vector.
 //
-// No ML classification exists anywhere yet (no verdict/confidence column,
-// no model) — don't fabricate one. The UI should say "not yet classified",
-// not guess.
+// ML classification lives in filter_ml_readings — a separate pipeline (a
+// desktop script polling audio_logs, running the model, writing results
+// back) populates it; nothing in this repo writes to it. Keyed by
+// device_mac + recorded_at, so unlike audio_logs it can hold real history —
+// this only ever reads the latest one, to pair with the latest recording.
 import { supabase } from "./supabase";
 
 const SIGNED_URL_TTL_SECONDS = 600;
 
+async function getLatestClassification(deviceMac) {
+  const { data, error } = await supabase
+    .from("filter_ml_readings")
+    .select("classifier_label, classifier_confidence, decision, mahalanobis_distance, ewma_value, disagreement_flag, recorded_at")
+    .eq("device_mac", deviceMac)
+    .order("recorded_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  return data;
+}
+
 // Returns null if there's no recording yet, otherwise:
-//   { kind: "audio", updatedAt, url }   — WiFi device, playable
-//   { kind: "lora",  updatedAt, mfcc }  — LoRaWAN device, features only
+//   { kind: "audio", updatedAt, url, classification }   — WiFi device, playable
+//   { kind: "lora",  updatedAt, mfcc, classification }  — LoRaWAN device, features only
+// `classification` is null when the desktop pipeline hasn't scored this
+// device yet — never fabricated.
 export async function getLatestRecording(deviceMac) {
   if (!deviceMac) return null;
 
@@ -34,8 +50,10 @@ export async function getLatestRecording(deviceMac) {
 
   if (error || !row) return null;
 
+  const classification = await getLatestClassification(deviceMac);
+
   if (row.is_lora) {
-    return { kind: "lora", updatedAt: row.updated_at, mfcc: row.mfcc_coefficients };
+    return { kind: "lora", updatedAt: row.updated_at, mfcc: row.mfcc_coefficients, classification };
   }
 
   if (!row.storage_path) return null;
@@ -46,7 +64,7 @@ export async function getLatestRecording(deviceMac) {
 
   if (signError || !signed?.signedUrl) return null;
 
-  return { kind: "audio", updatedAt: row.updated_at, url: signed.signedUrl };
+  return { kind: "audio", updatedAt: row.updated_at, url: signed.signedUrl, classification };
 }
 
 // Downsamples a decoded AudioBuffer to `bins` peak amplitudes for waveform rendering.

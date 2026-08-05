@@ -12,6 +12,7 @@ import {
   FILTER_INTERVAL_MIN_DAYS, FILTER_INTERVAL_MAX_DAYS, DEFAULT_FILTER_INTERVAL_DAYS,
   WAKE_INTERVAL_MIN_SECONDS, WAKE_INTERVAL_MAX_SECONDS, DEFAULT_WAKE_INTERVAL_SECONDS,
 } from "../../lib/config";
+import { getLatestVerdict } from "../../lib/mlVerdict";
 
 let Haptics = null;
 try { Haptics = require("expo-haptics"); } catch (_) {}
@@ -64,6 +65,28 @@ function FilterProgressBar({ pct, daysLeft, theme }) {
         <View style={[fpb.fill, { width: `${pct}%`, backgroundColor: color }]} />
       </View>
       <Text style={[fpb.pct, { color: theme.subtext }]}>{pct}% used</Text>
+    </View>
+  );
+}
+
+// Acoustic verdict, shown ALONGSIDE the time-based FilterProgressBar above,
+// never replacing it -- a brand-new device's classifier can be confidently
+// wrong until its per-device drift baseline has warmed up (see
+// ML/drift_detector.py), so the existing time-based estimate stays the
+// primary signal until there's ML history to trust. Renders nothing (not
+// even an empty slot) until a device actually has a verdict.
+function AcousticVerdictBadge({ mlVerdict }) {
+  if (!mlVerdict?.verdict) return null;
+  const isClean = mlVerdict.verdict === "clean";
+  const color = isClean ? "#22c55e" : "#f97316";
+  const label = isClean ? "Clean (acoustic)" : "Clogged (acoustic)";
+  const pct = mlVerdict.confidence != null ? Math.round(mlVerdict.confidence * 100) : null;
+  return (
+    <View style={[abadge.container, { backgroundColor: color + "15" }]}>
+      <Ionicons name={isClean ? "checkmark-circle" : "warning"} size={13} color={color} />
+      <Text style={[abadge.text, { color }]}>
+        {label}{pct != null ? ` · clf ${pct}% dirty` : ""}
+      </Text>
     </View>
   );
 }
@@ -449,7 +472,7 @@ function EditDeviceModal({ visible, device, onClose, onSave, theme, isOwner }) {
 }
 
 // ── Device Card ───────────────────────────────────────────────────────────────
-function DeviceCard({ device, onEdit, onDelete, index, theme, lastSeen, latestData, filterInstalledAt, isOwner }) {
+function DeviceCard({ device, onEdit, onDelete, onRecalibrate, index, theme, lastSeen, latestData, filterInstalledAt, isOwner, mlVerdict }) {
   const status = getOnlineStatus(lastSeen);
   const statusColor = status === "online" ? "#22c55e" : status === "idle" ? "#f59e0b" : "#9ca3af";
   const statusLabel = status === "online" ? "Online" : status === "idle" ? "Idle" : "Offline";
@@ -508,6 +531,7 @@ function DeviceCard({ device, onEdit, onDelete, index, theme, lastSeen, latestDa
         {lastSeen && <Text style={[styles.lastSeen, { color: theme.subtext }]}>Last seen {timeAgo(lastSeen)}</Text>}
 
         {filterProgress && <FilterProgressBar pct={filterProgress.pct} daysLeft={filterProgress.daysLeft} theme={theme} />}
+        <AcousticVerdictBadge mlVerdict={mlVerdict} />
 
         <View style={[styles.filterInfoRow, { backgroundColor: theme.inputBg }]}>
           <View style={styles.filterInfoItem}>
@@ -539,6 +563,12 @@ function DeviceCard({ device, onEdit, onDelete, index, theme, lastSeen, latestDa
             <Text style={[styles.editBtnText, { color: theme.subtext }]}>Edit</Text>
           </TouchableOpacity>
           {isOwner && (
+            <TouchableOpacity style={[styles.editBtn, { backgroundColor: theme.inputBg, borderWidth: 1, borderColor: theme.border }]} onPress={() => { haptic(); onRecalibrate(device); }}>
+              <Ionicons name="refresh" size={13} color={theme.subtext} />
+              <Text style={[styles.editBtnText, { color: theme.subtext }]}>Recalibrate</Text>
+            </TouchableOpacity>
+          )}
+          {isOwner && (
             <TouchableOpacity style={[styles.deleteBtn, { borderColor: "#fecaca", backgroundColor: theme.inputBg }]} onPress={() => { haptic(); onDelete(device); }}>
               <Ionicons name="remove-circle-outline" size={13} color="#ef4444" />
               <Text style={styles.deleteBtnText}>Remove</Text>
@@ -557,6 +587,7 @@ export default function DevicesScreen() {
   const [devices, setDevices] = useState([]);
   const [deviceStats, setDeviceStats] = useState({});
   const [filterInstallDates, setFilterInstallDates] = useState({});
+  const [mlVerdicts, setMlVerdicts] = useState({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [claimVisible, setClaimVisible] = useState(false);
@@ -594,6 +625,7 @@ export default function DevicesScreen() {
     if (devs.length > 0) {
       const stats = {};
       const installDates = {};
+      const verdicts = {};
       await Promise.all(devs.map(async (dev) => {
         const { data: logs, error: logsError } = await supabase.from("sensor_logs")
           .select("recorded_at, battery")
@@ -612,9 +644,15 @@ export default function DevicesScreen() {
           const firstSeen = allWithCurrent[allWithCurrent.length - 1]?.recorded_at;
           if (firstSeen) installDates[dev.id] = firstSeen;
         }
+
+        // Acoustic ML verdict is keyed by MAC (audio_logs.device_id), not
+        // devices.id -- null for devices the poller hasn't processed yet.
+        const verdict = await getLatestVerdict(dev.device_mac);
+        if (verdict) verdicts[dev.id] = verdict;
       }));
       setDeviceStats(stats);
       setFilterInstallDates(installDates);
+      setMlVerdicts(verdicts);
     }
   }, [session, technicianAssignments]);
 
@@ -648,6 +686,31 @@ export default function DevicesScreen() {
         else loadDevices();
       }},
     ]);
+  };
+
+  const handleRecalibrate = (device) => {
+    Alert.alert(
+      "Recalibrate Microphone",
+      `Reset the acoustic baseline for "${device.name || device.device_mac}"? Use this after moving the sensor, cleaning/replacing the mic, or installing a filter you know is clean. It will start relearning "normal" from scratch, so acoustic verdicts go quiet for a while until it warms back up.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Recalibrate", style: "destructive", onPress: async () => {
+          // .select() makes RLS-blocked deletes visible: 0 rows back = not reset
+          const { data, error } = await supabase
+            .from("device_baselines")
+            .delete()
+            .eq("device_mac", device.device_mac)
+            .select("device_mac");
+          if (error) { Alert.alert("Error", "Failed to recalibrate: " + error.message); return; }
+          if (!data || data.length === 0) {
+            Alert.alert("Nothing To Reset", "This device has no existing baseline yet, or you don't have permission to reset it.");
+            return;
+          }
+          Alert.alert("Recalibrating", "Baseline cleared. The next uploads will rebuild it from scratch.");
+          loadDevices();
+        }},
+      ]
+    );
   };
 
   const onlineCount = Object.values(deviceStats).filter(s => getOnlineStatus(s.lastSeen) === "online").length;
@@ -730,9 +793,11 @@ export default function DevicesScreen() {
               lastSeen: deviceStats[d.id]?.lastSeen,
               latestData: deviceStats[d.id]?.latestData,
               filterInstalledAt: filterInstallDates[d.id],
+              mlVerdict: mlVerdicts[d.id],
               isOwner: d._isOwner,
               onEdit: (dev) => { setEditingDevice(dev); setEditVisible(true); },
               onDelete: handleDelete,
+              onRecalibrate: handleRecalibrate,
             });
 
             return (
@@ -803,7 +868,7 @@ const styles = StyleSheet.create({
   filterInfoItem: { flexDirection: "row", alignItems: "center", gap: 4, flex: 1 },
   filterInfoText: { fontSize: 11, fontWeight: "600", flex: 1 },
   deviceDate: { fontSize: 11 },
-  cardBtns: { flexDirection: "row", gap: 8 },
+  cardBtns: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   editBtn: { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 14 },
   editBtnText: { fontWeight: "700", fontSize: 13 },
   deleteBtn: { flexDirection: "row", alignItems: "center", gap: 5, borderWidth: 1.5, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 14 },
@@ -829,6 +894,11 @@ const fpb = StyleSheet.create({
   track: { height: 6, borderRadius: 3, overflow: "hidden" },
   fill: { height: 6, borderRadius: 3 },
   pct: { fontSize: 10, fontWeight: "500" },
+});
+
+const abadge = StyleSheet.create({
+  container: { flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-start", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+  text: { fontSize: 11, fontWeight: "700" },
 });
 
 const scanStyles = StyleSheet.create({

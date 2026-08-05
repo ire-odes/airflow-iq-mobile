@@ -85,6 +85,27 @@ export default function Devices() {
     },
   });
 
+  // Resets the acoustic baseline (device_baselines row) so the ML pipeline
+  // (ML/service/poll_and_infer.py) treats the next reading as a fresh
+  // cold_start instead of comparing against a stale baseline -- for after
+  // moving the sensor, cleaning/replacing the mic, or installing a filter
+  // known to be genuinely clean. filter_ml_readings history is untouched.
+  const recalibrateDevice = (device) => setConfirm({
+    title: "Recalibrate microphone",
+    message: `Reset the acoustic baseline for "${device.name || device.device_mac}"? It will start relearning "normal" from scratch, so acoustic verdicts go quiet for a while until it warms back up.`,
+    confirmLabel: "Recalibrate",
+    danger: true,
+    action: async () => {
+      // .select() makes RLS-blocked deletes visible: 0 rows back = not reset
+      const { data, error } = await supabase
+        .from("device_baselines").delete().eq("device_mac", device.device_mac).select("device_mac");
+      if (error) return alert(`Failed to recalibrate: ${error.message}`);
+      if (!data || data.length === 0) {
+        return alert("This device has no existing baseline yet, or you don't have permission to reset it.");
+      }
+    },
+  });
+
   const runConfirm = async () => {
     setBusy(true);
     await confirm.action();
@@ -186,6 +207,7 @@ export default function Devices() {
                 installDates={installDates}
                 onEdit={setEditingDevice}
                 onRemove={removeDevice}
+                onRecalibrate={recalibrateDevice}
               />
             ))}
 
@@ -206,6 +228,7 @@ export default function Devices() {
                     installDates={installDates}
                     onEdit={setEditingDevice}
                     onRemove={removeDevice}
+                    onRecalibrate={recalibrateDevice}
                   />
                 ))}
               </>
@@ -240,7 +263,7 @@ export default function Devices() {
 }
 
 // ── One property and its devices ─────────────────────────────────────────────
-function PropertyGroupCard({ property, propDevices, stats, installDates, onEdit, onRemove }) {
+function PropertyGroupCard({ property, propDevices, stats, installDates, onEdit, onRemove, onRecalibrate }) {
   return (
     <div className="property-group">
       <div className="property-head">
@@ -281,6 +304,7 @@ function PropertyGroupCard({ property, propDevices, stats, installDates, onEdit,
               installedAt={installDates[d.id]}
               onEdit={() => onEdit(d)}
               onRemove={() => onRemove(d)}
+              onRecalibrate={() => onRecalibrate(d)}
             />
           ))}
         </div>
@@ -290,7 +314,7 @@ function PropertyGroupCard({ property, propDevices, stats, installDates, onEdit,
 }
 
 // ── Device card ──────────────────────────────────────────────────────────────
-function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove }) {
+function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, onRecalibrate }) {
   const status = getOnlineStatus(lastSeen);
   const statusColor = status === "online" ? "#22c55e" : status === "idle" ? "#f59e0b" : "#9ca3af";
   const statusLabel = status === "online" ? "Online" : status === "idle" ? "Idle" : "Offline";
@@ -364,8 +388,13 @@ function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove })
         </span>
       </div>
 
-      <div className="row gap-sm">
+      <div className="row gap-sm wrap">
         <button className="btn btn-sm" onClick={onEdit}><Icon name="pencil" size={13} /> Edit</button>
+        {device._isOwner && (
+          <button className="btn btn-sm" onClick={onRecalibrate} title="Reset the acoustic baseline">
+            <Icon name="refresh" size={13} /> Recalibrate
+          </button>
+        )}
         {device._isOwner && (
           <button className="btn btn-sm btn-danger" onClick={onRemove}>
             <Icon name="trash" size={13} /> Remove

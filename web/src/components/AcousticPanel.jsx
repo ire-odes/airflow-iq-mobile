@@ -8,7 +8,13 @@ import { getLatestRecording, computePeaks, normalizeMfcc } from "../lib/audioRec
 // Acoustic Data — real recordings from audio_logs / hvac-recordings storage,
 // paired with real classifier output from filter_ml_readings when a device
 // has been scored (a separate pipeline — not this repo — writes those rows).
-// Devices with no reading yet show "not yet classified", never a guess.
+// Three states, never a guess in place of the honest one:
+//   no classification row yet -> "Not yet classified"
+//   decision === "calibrating" -> device hasn't finished its acoustic
+//     warmup; the classifier's raw opinion is known to misfire on a new
+//     environment, so it's deliberately never shown as a verdict here
+//   decision === "clean" | "dirty" -> a real verdict, from drift once the
+//     device is warm (or from the classifier only very early on)
 // See lib/audioRecordings.js for the data shape and the WiFi-audio vs.
 // LoRaWAN-MFCC split.
 // ============================================================================
@@ -188,11 +194,20 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
   );
 
   const classification = recording?.classification || null;
+  // "calibrating" means the device hasn't finished its acoustic warmup --
+  // the classifier alone is unreliable on a brand-new environment (a real
+  // device called 100% of a real house's clean readings "dirty"), so its
+  // raw opinion is never surfaced as a verdict until drift takes over.
+  const isCalibrating = classification?.decision === "calibrating";
   const isDirty = classification?.decision === "dirty";
+  // classifier_confidence is the classifier's own P(dirty) specifically --
+  // labeled as such rather than implied to be "confidence in this verdict",
+  // since once a device is WARM the verdict usually comes from drift, not
+  // the classifier.
   const confidencePct = classification?.classifier_confidence != null
     ? Math.round(classification.classifier_confidence * 100)
     : null;
-  const hasDisagreement = !!classification?.disagreement_flag
+  const hasDisagreement = !isCalibrating && !!classification?.disagreement_flag
     && !["none", "false", "no"].includes(String(classification.disagreement_flag).toLowerCase());
 
   return (
@@ -207,10 +222,14 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
           </p>
         </div>
         {recording && (
-          classification ? (
+          isCalibrating ? (
+            <span className="badge" style={{ background: "#6366f11f", color: "#6366f1" }}>
+              <Icon name="pulse" size={11} /> Calibrating…
+            </span>
+          ) : classification ? (
             <span className="badge" style={{ background: isDirty ? "#ef44441f" : "#22c55e1f", color: isDirty ? "#ef4444" : "#22c55e" }}>
               <Icon name={isDirty ? "warning" : "success"} size={11} />
-              {isDirty ? "Filter Dirty" : "Filter Clean"} · {confidencePct}%
+              {isDirty ? "Filter Dirty" : "Filter Clean"} · clf {confidencePct}% dirty
             </span>
           ) : (
             <span className="badge" style={{ background: "#6366f11f", color: "#6366f1" }}>
@@ -220,7 +239,18 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
         )}
       </div>
 
-      {classification && (
+      {isCalibrating && (
+        <div className="banner" style={{ background: "var(--inputBg)", borderColor: "var(--border)" }}>
+          <Icon name="pulse" size={16} style={{ color: "var(--subtext)" }} />
+          <span className="grow">
+            Learning this device's normal acoustic signature — verdicts appear once it's
+            collected enough readings. This can take a while after a device is claimed, moved,
+            or recalibrated.
+          </span>
+        </div>
+      )}
+
+      {classification && !isCalibrating && (
         <div
           className="banner"
           style={{
@@ -231,7 +261,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
         >
           <Icon name={isDirty ? "warning" : "success"} size={16} />
           <span className="grow">
-            <strong>{classification.classifier_label}</strong> — {confidencePct}% confidence
+            <strong>{classification.classifier_label}</strong> — clf {confidencePct}% dirty
             {hasDisagreement && <> · <strong>flagged:</strong> {classification.disagreement_flag}</>}
           </span>
           <span className="hint" style={{ fontSize: 11 }}>{timeAgo(classification.recorded_at)}</span>

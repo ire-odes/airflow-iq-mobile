@@ -77,6 +77,20 @@ function FilterProgressBar({ pct, daysLeft, theme }) {
 // even an empty slot) until a device actually has a verdict.
 function AcousticVerdictBadge({ mlVerdict }) {
   if (!mlVerdict?.verdict) return null;
+
+  // "calibrating" means the device hasn't finished its acoustic warmup --
+  // the classifier alone is known to misfire on a brand-new environment
+  // (a real device called 100% of a real house's clean readings "dirty"),
+  // so its raw opinion never gets shown as a verdict during this phase.
+  if (mlVerdict.verdict === "calibrating") {
+    return (
+      <View style={[abadge.container, { backgroundColor: "#6366f115" }]}>
+        <Ionicons name="sync" size={13} color="#6366f1" />
+        <Text style={[abadge.text, { color: "#6366f1" }]}>Calibrating…</Text>
+      </View>
+    );
+  }
+
   const isClean = mlVerdict.verdict === "clean";
   const color = isClean ? "#22c55e" : "#f97316";
   const label = isClean ? "Clean (acoustic)" : "Clogged (acoustic)";

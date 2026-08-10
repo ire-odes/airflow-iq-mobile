@@ -114,6 +114,36 @@ export function getFilterProgress(installedAt, intervalDays) {
   return { daysSince, daysLeft, pct, intervalDays };
 }
 
+// For now, filter life is determined ONLY by observed RFID tag changes —
+// not the device's configured filter_interval_days. Average number of
+// days between past tag changes, from a device's sensor_logs rows
+// (any order, {recorded_at, rfid}, rfid non-null). Needs at least two
+// observed changes (three distinct tags) to produce a number; otherwise
+// null, meaning "not enough history yet" — deliberately no fallback to
+// the configured interval.
+export function getRfidAvgLifespanDays(rfidLogs) {
+  if (!rfidLogs?.length) return null;
+  const asc = [...rfidLogs].sort((a, b) => parseTs(a.recorded_at) - parseTs(b.recorded_at));
+
+  const changeTimes = [];
+  let lastRfid = null;
+  asc.forEach((row) => {
+    if (row.rfid && row.rfid !== lastRfid) {
+      if (lastRfid !== null) changeTimes.push(row.recorded_at);
+      lastRfid = row.rfid;
+    }
+  });
+  if (changeTimes.length < 2) return null;
+
+  const spans = [];
+  for (let i = 1; i < changeTimes.length; i++) {
+    const days = Math.floor((parseTs(changeTimes[i]) - parseTs(changeTimes[i - 1])) / 86400000);
+    if (days > 0 && days < 730) spans.push(days);
+  }
+  if (!spans.length) return null;
+  return Math.round(spans.reduce((s, v) => s + v, 0) / spans.length);
+}
+
 // Supabase returns timestamps as "YYYY-MM-DD HH:MM:SS" or ISO — normalise both.
 export function parseTs(ts) {
   if (!ts) return new Date(NaN);

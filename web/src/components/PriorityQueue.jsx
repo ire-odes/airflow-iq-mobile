@@ -3,8 +3,7 @@ import { NavLink } from "react-router-dom";
 import Icon from "./Icon";
 import { supabase } from "../lib/supabase";
 import { useScope } from "../context/ScopeContext";
-import { getOnlineStatus, getFilterProgress } from "../lib/metrics";
-import { DEFAULT_FILTER_INTERVAL_DAYS } from "../lib/config";
+import { getOnlineStatus, getFilterProgress, getRfidAvgLifespanDays } from "../lib/metrics";
 
 // ============================================================================
 // "Needs Attention" — a portfolio-wide count, independent of whatever
@@ -37,13 +36,15 @@ export default function PriorityQueue() {
         ]);
 
         let installedAt = null;
+        let avgLifespanDays = null;
         if (rfidLogs?.length) {
           const current = rfidLogs[0].rfid;
           const withCurrent = rfidLogs.filter((r) => r.rfid === current);
           installedAt = withCurrent[withCurrent.length - 1]?.recorded_at || null;
+          avgLifespanDays = getRfidAvgLifespanDays(rfidLogs);
         }
 
-        next[dev.id] = { lastSeen: logs?.[0]?.recorded_at || null, installedAt };
+        next[dev.id] = { lastSeen: logs?.[0]?.recorded_at || null, installedAt, avgLifespanDays };
       }));
 
       if (!cancelled) { setHealth(next); setLoading(false); }
@@ -59,7 +60,9 @@ export default function PriorityQueue() {
     return devices.filter((d) => {
       const h = health[d.id] || {};
       const status = getOnlineStatus(h.lastSeen);
-      const fp = getFilterProgress(h.installedAt, d.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS);
+      // For now, filter life is determined ONLY by observed RFID tag
+      // changes, not the configured filter_interval_days.
+      const fp = getFilterProgress(h.installedAt, h.avgLifespanDays);
       return (fp && fp.pct >= 90) || status === "offline";
     }).length;
   }, [devices, health]);

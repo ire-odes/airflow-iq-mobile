@@ -5,7 +5,7 @@ import Modal, { ConfirmModal } from "../components/Modal";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../context/AuthContext";
 import { useScope, UNASSIGNED_ID } from "../context/ScopeContext";
-import { getFilterProgress, getOnlineStatus } from "../lib/metrics";
+import { getFilterProgress, getOnlineStatus, getRfidAvgLifespanDays } from "../lib/metrics";
 import { timeAgo, wakeLabel } from "../lib/format";
 import {
   DEFAULT_FILTER_INTERVAL_DAYS, DEFAULT_WAKE_INTERVAL_SECONDS,
@@ -23,6 +23,7 @@ export default function Devices() {
 
   const [stats, setStats] = useState({});
   const [installDates, setInstallDates] = useState({});
+  const [avgLifespans, setAvgLifespans] = useState({});
 
   const [claimOpen, setClaimOpen] = useState(false);
   const [editingDevice, setEditingDevice] = useState(null);
@@ -35,6 +36,7 @@ export default function Devices() {
 
     const nextStats = {};
     const nextInstall = {};
+    const nextAvgLifespan = {};
 
     await Promise.all(devices.map(async (dev) => {
       const [{ data: logs }, { data: rfidLogs }] = await Promise.all([
@@ -53,11 +55,13 @@ export default function Devices() {
         const withCurrent = rfidLogs.filter((r) => r.rfid === current);
         const firstSeen = withCurrent[withCurrent.length - 1]?.recorded_at;
         if (firstSeen) nextInstall[dev.id] = firstSeen;
+        nextAvgLifespan[dev.id] = getRfidAvgLifespanDays(rfidLogs);
       }
     }));
 
     setStats(nextStats);
     setInstallDates(nextInstall);
+    setAvgLifespans(nextAvgLifespan);
   }, [devices]);
 
   useEffect(() => { loadStats(); }, [loadStats]);
@@ -117,11 +121,11 @@ export default function Devices() {
   const counts = useMemo(() => {
     const online = devices.filter((d) => getOnlineStatus(stats[d.id]?.lastSeen) === "online").length;
     const dueSoon = devices.filter((d) => {
-      const fp = getFilterProgress(installDates[d.id], d.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS);
+      const fp = getFilterProgress(installDates[d.id], avgLifespans[d.id]);
       return fp && fp.pct >= 90;
     }).length;
     return { total: devices.length, online, offline: devices.length - online, dueSoon };
-  }, [devices, stats, installDates]);
+  }, [devices, stats, installDates, avgLifespans]);
 
   return (
     <>
@@ -205,6 +209,7 @@ export default function Devices() {
                 propDevices={propDevices}
                 stats={stats}
                 installDates={installDates}
+                avgLifespans={avgLifespans}
                 onEdit={setEditingDevice}
                 onRemove={removeDevice}
                 onRecalibrate={recalibrateDevice}
@@ -226,6 +231,7 @@ export default function Devices() {
                     propDevices={propDevices}
                     stats={stats}
                     installDates={installDates}
+                    avgLifespans={avgLifespans}
                     onEdit={setEditingDevice}
                     onRemove={removeDevice}
                     onRecalibrate={recalibrateDevice}
@@ -263,7 +269,7 @@ export default function Devices() {
 }
 
 // ── One property and its devices ─────────────────────────────────────────────
-function PropertyGroupCard({ property, propDevices, stats, installDates, onEdit, onRemove, onRecalibrate }) {
+function PropertyGroupCard({ property, propDevices, stats, installDates, avgLifespans, onEdit, onRemove, onRecalibrate }) {
   return (
     <div className="property-group">
       <div className="property-head">
@@ -302,6 +308,7 @@ function PropertyGroupCard({ property, propDevices, stats, installDates, onEdit,
               lastSeen={stats[d.id]?.lastSeen}
               latest={stats[d.id]?.latest}
               installedAt={installDates[d.id]}
+              avgLifespanDays={avgLifespans[d.id]}
               onEdit={() => onEdit(d)}
               onRemove={() => onRemove(d)}
               onRecalibrate={() => onRecalibrate(d)}
@@ -314,12 +321,14 @@ function PropertyGroupCard({ property, propDevices, stats, installDates, onEdit,
 }
 
 // ── Device card ──────────────────────────────────────────────────────────────
-function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, onRecalibrate }) {
+function DeviceCard({ device, lastSeen, latest, installedAt, avgLifespanDays, onEdit, onRemove, onRecalibrate }) {
   const status = getOnlineStatus(lastSeen);
   const statusColor = status === "online" ? "#22c55e" : status === "idle" ? "#f59e0b" : "#9ca3af";
   const statusLabel = status === "online" ? "Online" : status === "idle" ? "Idle" : "Offline";
 
-  const fp = getFilterProgress(installedAt, device.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS);
+  // For now, filter life is determined ONLY by observed RFID tag changes,
+  // not the configured filter_interval_days -- see getRfidAvgLifespanDays.
+  const fp = getFilterProgress(installedAt, avgLifespanDays);
   const fpColor = !fp ? "#9ca3af" : fp.pct >= 100 ? "#ef4444" : fp.pct >= 75 ? "#f59e0b" : "#22c55e";
   const fpLabel = !fp ? "" : fp.pct >= 100 ? "Replace now" : fp.pct >= 90 ? "Replace soon" : fp.pct >= 75 ? "Watch closely" : `${fp.daysLeft}d left`;
 

@@ -52,6 +52,37 @@ function getFilterProgress(installedAt, intervalDays) {
   return { daysSince, daysLeft, pct, intervalDays };
 }
 
+// For now, filter life is determined ONLY by observed RFID tag changes --
+// not the device's configured filter_interval_days. Average number of days
+// between past tag changes, from a device's sensor_logs rfid rows (any
+// order, {recorded_at, rfid}, rfid non-null). Needs at least two observed
+// changes (three distinct tags) to produce a number; otherwise null,
+// meaning "not enough history yet" -- deliberately no fallback to the
+// configured interval.
+function getRfidAvgLifespanDays(rfidLogs) {
+  if (!rfidLogs?.length) return null;
+  const ts = (t) => new Date(t.replace ? t.replace(" ", "T") : t).getTime();
+  const asc = [...rfidLogs].sort((a, b) => ts(a.recorded_at) - ts(b.recorded_at));
+
+  const changeTimes = [];
+  let lastRfid = null;
+  asc.forEach((row) => {
+    if (row.rfid && row.rfid !== lastRfid) {
+      if (lastRfid !== null) changeTimes.push(row.recorded_at);
+      lastRfid = row.rfid;
+    }
+  });
+  if (changeTimes.length < 2) return null;
+
+  const spans = [];
+  for (let i = 1; i < changeTimes.length; i++) {
+    const days = Math.floor((ts(changeTimes[i]) - ts(changeTimes[i - 1])) / 86400000);
+    if (days > 0 && days < 730) spans.push(days);
+  }
+  if (!spans.length) return null;
+  return Math.round(spans.reduce((s, v) => s + v, 0) / spans.length);
+}
+
 function FilterProgressBar({ pct, daysLeft, theme }) {
   const color = pct >= 100 ? "#ef4444" : pct >= 75 ? "#f59e0b" : pct >= 50 ? "#f59e0b" : "#22c55e";
   const label = pct >= 100 ? "Replace now" : pct >= 90 ? "Replace soon" : pct >= 75 ? "Watch closely" : `${daysLeft}d left`;
@@ -472,11 +503,13 @@ function EditDeviceModal({ visible, device, onClose, onSave, theme, isOwner }) {
 }
 
 // ── Device Card ───────────────────────────────────────────────────────────────
-function DeviceCard({ device, onEdit, onDelete, onRecalibrate, index, theme, lastSeen, latestData, filterInstalledAt, isOwner, mlVerdict }) {
+function DeviceCard({ device, onEdit, onDelete, onRecalibrate, index, theme, lastSeen, latestData, filterInstalledAt, filterAvgLifespanDays, isOwner, mlVerdict }) {
   const status = getOnlineStatus(lastSeen);
   const statusColor = status === "online" ? "#22c55e" : status === "idle" ? "#f59e0b" : "#9ca3af";
   const statusLabel = status === "online" ? "Online" : status === "idle" ? "Idle" : "Offline";
-  const filterProgress = getFilterProgress(filterInstalledAt, device.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS);
+  // For now, filter life is determined ONLY by observed RFID tag changes,
+  // not the configured filter_interval_days -- see getRfidAvgLifespanDays.
+  const filterProgress = getFilterProgress(filterInstalledAt, filterAvgLifespanDays);
   const addedDate = device.created_at ? new Date(device.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "";
   const wakeSeconds = device.wake_interval_seconds || DEFAULT_WAKE_INTERVAL_SECONDS;
   const wakeLabel = wakeSeconds < 60 ? `${wakeSeconds}s` : wakeSeconds < 3600 ? `${wakeSeconds / 60}m` : `${wakeSeconds / 3600}h`;
@@ -587,6 +620,7 @@ export default function DevicesScreen() {
   const [devices, setDevices] = useState([]);
   const [deviceStats, setDeviceStats] = useState({});
   const [filterInstallDates, setFilterInstallDates] = useState({});
+  const [filterAvgLifespans, setFilterAvgLifespans] = useState({});
   const [mlVerdicts, setMlVerdicts] = useState({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -625,6 +659,7 @@ export default function DevicesScreen() {
     if (devs.length > 0) {
       const stats = {};
       const installDates = {};
+      const avgLifespans = {};
       const verdicts = {};
       await Promise.all(devs.map(async (dev) => {
         const { data: logs, error: logsError } = await supabase.from("sensor_logs")
@@ -643,6 +678,7 @@ export default function DevicesScreen() {
           const allWithCurrent = rfidLogs.filter(r => r.rfid === currentRfid);
           const firstSeen = allWithCurrent[allWithCurrent.length - 1]?.recorded_at;
           if (firstSeen) installDates[dev.id] = firstSeen;
+          avgLifespans[dev.id] = getRfidAvgLifespanDays(rfidLogs);
         }
 
         // Acoustic ML verdict is keyed by MAC (audio_logs.device_id), not
@@ -652,6 +688,7 @@ export default function DevicesScreen() {
       }));
       setDeviceStats(stats);
       setFilterInstallDates(installDates);
+      setFilterAvgLifespans(avgLifespans);
       setMlVerdicts(verdicts);
     }
   }, [session, technicianAssignments]);
@@ -716,7 +753,8 @@ export default function DevicesScreen() {
   const onlineCount = Object.values(deviceStats).filter(s => getOnlineStatus(s.lastSeen) === "online").length;
   const offlineCount = devices.length - onlineCount;
   const needsReplacementCount = devices.filter(d => {
-    const fp = getFilterProgress(filterInstallDates[d.id], d.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS);
+    // For now, filter life is determined ONLY by observed RFID tag changes.
+    const fp = getFilterProgress(filterInstallDates[d.id], filterAvgLifespans[d.id]);
     return fp && fp.pct >= 90;
   }).length;
 
@@ -793,6 +831,7 @@ export default function DevicesScreen() {
               lastSeen: deviceStats[d.id]?.lastSeen,
               latestData: deviceStats[d.id]?.latestData,
               filterInstalledAt: filterInstallDates[d.id],
+              filterAvgLifespanDays: filterAvgLifespans[d.id],
               mlVerdict: mlVerdicts[d.id],
               isOwner: d._isOwner,
               onEdit: (dev) => { setEditingDevice(dev); setEditVisible(true); },

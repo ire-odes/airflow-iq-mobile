@@ -14,6 +14,20 @@ import { getLatestRecording, computePeaks, normalizeMfcc } from "../lib/audioRec
 // ============================================================================
 
 const WAVE_BINS = 190;
+const TRIM_LEADING_SECONDS = 0.05; // drop the mic-startup click at the very start of the clip
+
+// Returns a new AudioBuffer with the first `seconds` removed from every
+// channel — used once, right after decode, so the waveform, duration, and
+// playback all agree on the trimmed clip.
+function trimBufferStart(ctx, buffer, seconds) {
+  const trimSamples = Math.min(Math.floor(seconds * buffer.sampleRate), buffer.length - 1);
+  if (trimSamples <= 0) return buffer;
+  const trimmed = ctx.createBuffer(buffer.numberOfChannels, buffer.length - trimSamples, buffer.sampleRate);
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+    trimmed.getChannelData(ch).set(buffer.getChannelData(ch).subarray(trimSamples));
+  }
+  return trimmed;
+}
 
 export default function AcousticPanel({ deviceMac, deviceName }) {
   const { theme } = useTheme();
@@ -95,7 +109,8 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
         const res = await fetch(recording.url);
         if (!res.ok) throw new Error(`Recording fetch failed (${res.status})`);
         const arrayBuf = await res.arrayBuffer();
-        const buffer = await ctxRef.current.decodeAudioData(arrayBuf);
+        const decoded = await ctxRef.current.decodeAudioData(arrayBuf);
+        const buffer = trimBufferStart(ctxRef.current, decoded, TRIM_LEADING_SECONDS);
         if (cancelled) return;
         bufferRef.current = buffer;
         setPeaks(computePeaks(buffer, WAVE_BINS));

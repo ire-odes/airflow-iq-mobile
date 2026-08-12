@@ -323,13 +323,16 @@ function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, o
   const fpColor = !fp ? "#9ca3af" : fp.pct >= 100 ? "#ef4444" : fp.pct >= 75 ? "#f59e0b" : "#22c55e";
   const fpLabel = !fp ? "" : fp.pct >= 100 ? "Replace now" : fp.pct >= 90 ? "Replace soon" : fp.pct >= 75 ? "Watch closely" : `${fp.daysLeft}d left`;
 
-  // Battery is reported as a raw cell voltage; 2.8–3.2V maps to 0–100%.
+  // Battery is a raw cell voltage. The TPS regulator needs >=1.8V in to
+  // hold a steady output and the cell maxes at 3.0V, so 1.8V (empty) ->
+  // 3.0V (full) is the usable window -- matches pctFromBatt() in the
+  // firmware's battery calibration test sketch.
   const volts = latest?.battery;
   const battPct = volts != null
-    ? Math.min(100, Math.max(0, Math.round(((volts - 2.8) / 0.4) * 100)))
+    ? Math.min(100, Math.max(0, Math.round(((volts - 1.8) / 1.2) * 100)))
     : null;
   const battColor = battPct == null ? "#9ca3af"
-    : battPct <= 10 ? "#ef4444" : battPct <= 25 ? "#f97316" : battPct <= 50 ? "#f59e0b" : "#22c55e";
+    : battPct <= 15 ? "#ef4444" : battPct <= 40 ? "#f97316" : battPct <= 75 ? "#f59e0b" : "#22c55e";
 
   return (
     <article className="card device-card">

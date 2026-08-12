@@ -481,12 +481,16 @@ function DeviceCard({ device, onEdit, onDelete, onRecalibrate, index, theme, las
   const wakeSeconds = device.wake_interval_seconds || DEFAULT_WAKE_INTERVAL_SECONDS;
   const wakeLabel = wakeSeconds < 60 ? `${wakeSeconds}s` : wakeSeconds < 3600 ? `${wakeSeconds / 60}m` : `${wakeSeconds / 3600}h`;
 
+  // Battery is a raw cell voltage. The TPS regulator needs >=1.8V in to
+  // hold a steady output and the cell maxes at 3.0V, so 1.8V (empty) ->
+  // 3.0V (full) is the usable window -- matches pctFromBatt() in the
+  // firmware's battery calibration test sketch.
   const battVoltage = latestData?.battery;
   const battPct = battVoltage != null
-    ? Math.min(100, Math.max(0, Math.round(((battVoltage - 2.8) / (3.2 - 2.8)) * 100)))
+    ? Math.min(100, Math.max(0, Math.round(((battVoltage - 1.8) / 1.2) * 100)))
     : null;
-  const battColor = battPct == null ? "#9ca3af" : battPct <= 10 ? "#ef4444" : battPct <= 25 ? "#f97316" : battPct <= 50 ? "#f59e0b" : "#22c55e";
-  const battIcon = battPct == null ? "battery-dead-outline" : battPct <= 10 ? "battery-dead" : battPct <= 25 ? "battery-dead-outline" : battPct <= 50 ? "battery-half" : "battery-full";
+  const battColor = battPct == null ? "#9ca3af" : battPct <= 15 ? "#ef4444" : battPct <= 40 ? "#f97316" : battPct <= 75 ? "#f59e0b" : "#22c55e";
+  const battIcon = battPct == null ? "battery-dead-outline" : battPct <= 15 ? "battery-dead" : battPct <= 40 ? "battery-dead-outline" : battPct <= 75 ? "battery-half" : "battery-full";
 
   return (
     <View style={[styles.card, { backgroundColor: theme.card }]}>

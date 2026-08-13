@@ -5,7 +5,7 @@ import Modal, { ConfirmModal } from "../components/Modal";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../context/AuthContext";
 import { useScope, UNASSIGNED_ID } from "../context/ScopeContext";
-import { getFilterProgress, getOnlineStatus } from "../lib/metrics";
+import { getFilterProgress, getOnlineStatus, getBatteryStage } from "../lib/metrics";
 import { timeAgo, wakeLabel } from "../lib/format";
 import {
   DEFAULT_FILTER_INTERVAL_DAYS, DEFAULT_WAKE_INTERVAL_SECONDS,
@@ -313,6 +313,28 @@ function PropertyGroupCard({ property, propDevices, stats, installDates, onEdit,
   );
 }
 
+// Stepped battery graphic: a body of 4 segments, `stage.bars` of them
+// filled -- see getBatteryStage in lib/metrics.js for the voltage bands.
+function BatteryStageIcon({ stage }) {
+  if (!stage) return null;
+  return (
+    <span className="row" style={{ gap: 1.5 }}>
+      <span
+        className="row"
+        style={{ gap: 1.5, width: 22, height: 12, border: `1.3px solid ${stage.color}66`, borderRadius: 3, padding: 1.5, boxSizing: "border-box" }}
+      >
+        {[1, 2, 3, 4].map((i) => (
+          <span
+            key={i}
+            style={{ flex: 1, height: "100%", borderRadius: 1, background: i <= stage.bars ? stage.color : "transparent" }}
+          />
+        ))}
+      </span>
+      <span style={{ width: 2, height: 6, borderRadius: 1, background: `${stage.color}66` }} />
+    </span>
+  );
+}
+
 // ── Device card ──────────────────────────────────────────────────────────────
 function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, onRecalibrate }) {
   const status = getOnlineStatus(lastSeen);
@@ -323,16 +345,7 @@ function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, o
   const fpColor = !fp ? "#9ca3af" : fp.pct >= 100 ? "#ef4444" : fp.pct >= 75 ? "#f59e0b" : "#22c55e";
   const fpLabel = !fp ? "" : fp.pct >= 100 ? "Replace now" : fp.pct >= 90 ? "Replace soon" : fp.pct >= 75 ? "Watch closely" : `${fp.daysLeft}d left`;
 
-  // Battery is a raw cell voltage. The TPS regulator needs >=1.8V in to
-  // hold a steady output and the cell maxes at 3.0V, so 1.8V (empty) ->
-  // 3.0V (full) is the usable window -- matches pctFromBatt() in the
-  // firmware's battery calibration test sketch.
-  const volts = latest?.battery;
-  const battPct = volts != null
-    ? Math.min(100, Math.max(0, Math.round(((volts - 1.8) / 1.2) * 100)))
-    : null;
-  const battColor = battPct == null ? "#9ca3af"
-    : battPct <= 15 ? "#ef4444" : battPct <= 40 ? "#f97316" : battPct <= 75 ? "#f59e0b" : "#22c55e";
+  const battStage = getBatteryStage(latest?.battery);
 
   return (
     <article className="card device-card">
@@ -360,9 +373,9 @@ function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, o
           <span className="badge" style={{ background: `${statusColor}22`, color: statusColor }}>
             <span className="dot" style={{ background: statusColor }} /> {statusLabel}
           </span>
-          {battPct != null && (
-            <span className="row" style={{ gap: 4, fontSize: 11.5, fontWeight: 700, color: battColor }}>
-              <Icon name="battery" size={13} /> {battPct}%
+          {battStage && (
+            <span title={`Battery: ${battStage.label}`}>
+              <BatteryStageIcon stage={battStage} />
             </span>
           )}
         </div>

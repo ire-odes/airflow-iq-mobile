@@ -106,6 +106,23 @@ export function getOnlineStatus(lastSeen) {
   return "offline";
 }
 
+// Battery is a raw cell voltage. The firmware's usable window is 1.8V
+// (regulator cutoff) -> 3.0V (full cell) -- see pctFromBatt() in the
+// hardware calibration sketch. A precise percentage reads noisier than it
+// is (cell voltage sags under load), so instead of a number the UI shows
+// a stepped bar graphic across four even 0.3V bands.
+export const BATTERY_STAGES = [
+  { min: 2.7,       bars: 4, label: "Full",     color: "#22c55e" },
+  { min: 2.4,       bars: 3, label: "Medium",   color: "#f59e0b" },
+  { min: 2.1,       bars: 2, label: "Low",      color: "#f97316" },
+  { min: -Infinity, bars: 1, label: "Critical", color: "#ef4444" },
+];
+
+export function getBatteryStage(voltage) {
+  if (voltage == null) return null;
+  return BATTERY_STAGES.find((s) => voltage >= s.min);
+}
+
 export function getFilterProgress(installedAt, intervalDays) {
   if (!installedAt || !intervalDays) return null;
   const daysSince = Math.floor((Date.now() - parseTs(installedAt).getTime()) / 86400000);

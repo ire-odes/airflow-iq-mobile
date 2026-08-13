@@ -32,7 +32,7 @@ export default function PriorityQueue() {
           supabase.from("sensor_logs").select("recorded_at")
             .eq("device_id", dev.id).order("recorded_at", { ascending: false }).limit(1),
           supabase.from("sensor_logs").select("recorded_at, rfid")
-            .eq("device_id", dev.id).not("rfid", "is", null)
+            .eq("device_id", dev.id).not("rfid", "is", null).neq("rfid", "")
             .order("recorded_at", { ascending: false }).limit(100),
         ]);
 

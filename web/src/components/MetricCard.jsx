@@ -17,7 +17,6 @@ export default function MetricCard({ metric, stats, pct, onClick }) {
   return (
     <button
       className="metric-card"
-      style={{ "--metric-color": metric.color }}
       onClick={onClick}
       title={
         outOfRange
@@ -44,10 +43,12 @@ export default function MetricCard({ metric, stats, pct, onClick }) {
         )}
       </div>
 
-      <div className="metric-value">{avg != null ? avg.toFixed(dec) : "—"}</div>
-      <div className="metric-unit">
-        {metric.unit.trim()}
-        <span style={{ opacity: 0.75, fontWeight: 500 }}> avg</span>
+      <div className="metric-value-row">
+        <div className="metric-value">{avg != null ? avg.toFixed(dec) : "—"}</div>
+        <div className="metric-unit">
+          {metric.unit.trim()}
+          <span style={{ opacity: 0.75, fontWeight: 500 }}> avg</span>
+        </div>
       </div>
 
       <div className="metric-minmax">

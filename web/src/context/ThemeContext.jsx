@@ -16,8 +16,14 @@ export const light = {
   sidebar: "#FFFFFF",
   shadow: "0 2px 12px rgba(16, 24, 40, 0.06)",
   shadowLg: "0 8px 30px rgba(16, 24, 40, 0.10)",
+  shadowXl: "0 16px 44px rgba(16, 24, 40, 0.14)",
   gradFrom: "#2563eb",
   gradTo: "#60a5fa",
+  waveformOpacity: "0.65",
+  waveformFrom: "#ffffff",
+  waveformTo: "#eaf2ff",
+  waveformGlow: "rgba(0, 123, 255, 0.16)",
+  waveformStroke: "#0b2f66",
 };
 
 export const dark = {
@@ -35,8 +41,14 @@ export const dark = {
   sidebar: "#141724",
   shadow: "0 2px 12px rgba(0, 0, 0, 0.35)",
   shadowLg: "0 8px 30px rgba(0, 0, 0, 0.5)",
+  shadowXl: "0 16px 44px rgba(0, 0, 0, 0.6)",
   gradFrom: "#0b2f66",
   gradTo: "#007BFF",
+  waveformOpacity: "0.8",
+  waveformFrom: "#000000",
+  waveformTo: "#0a0e1a",
+  waveformGlow: "rgba(0, 123, 255, 0.30)",
+  waveformStroke: "#ffffff",
 };
 
 const STORAGE_KEY = "airflow_theme";

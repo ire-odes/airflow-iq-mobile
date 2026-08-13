@@ -564,7 +564,7 @@ export default function DashboardScreen() {
     const deviceIds = await getUserDeviceIds();
     if (deviceIds.length === 0) return;
     const { data, error } = await supabase.from("sensor_logs").select("recorded_at, rfid, device_id")
-      .in("device_id", deviceIds).not("rfid", "is", null).order("recorded_at", { ascending: true });
+      .in("device_id", deviceIds).not("rfid", "is", null).neq("rfid", "").order("recorded_at", { ascending: true });
     if (error) { console.warn("fetchFilterData:", error.message); return; }
     if (!data || data.length === 0) return;
     const latest = [...data].reverse().find((r) => r.rfid);

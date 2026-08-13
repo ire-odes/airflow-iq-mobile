@@ -204,14 +204,11 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
 
   const classification = recording?.classification || null;
   const isDirty = classification?.decision === "dirty";
-  const confidencePct = classification?.classifier_confidence != null
-    ? Math.round(classification.classifier_confidence * 100)
-    : null;
   const hasDisagreement = !!classification?.disagreement_flag
     && !["none", "false", "no"].includes(String(classification.disagreement_flag).toLowerCase());
 
   return (
-    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <section className="card card-pad card-lift" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div className="row" style={{ alignItems: "flex-start" }}>
         <div className="property-icon"><Icon name="waveform" size={18} /></div>
         <div className="grow">
@@ -223,9 +220,16 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
         </div>
         {recording && (
           classification ? (
-            <span className="badge" style={{ background: isDirty ? "#ef44441f" : "#22c55e1f", color: isDirty ? "#ef4444" : "#22c55e" }}>
+            <span
+              className="badge"
+              style={{ background: isDirty ? "#ef44441f" : "#22c55e1f", color: isDirty ? "#ef4444" : "#22c55e" }}
+              title={
+                `${classification.classifier_label} · ${timeAgo(classification.recorded_at)}`
+                + (hasDisagreement ? ` · flagged: ${classification.disagreement_flag}` : "")
+              }
+            >
               <Icon name={isDirty ? "warning" : "success"} size={11} />
-              {isDirty ? "Filter Dirty" : "Filter Clean"} · {confidencePct}%
+              {isDirty ? "Filter Dirty" : "Filter Clean"}
             </span>
           ) : (
             <span className="badge" style={{ background: "#6366f11f", color: "#6366f1" }}>
@@ -234,24 +238,6 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
           )
         )}
       </div>
-
-      {classification && (
-        <div
-          className="banner"
-          style={{
-            background: isDirty ? "#ef44441a" : "#22c55e1a",
-            borderColor: isDirty ? "#ef444455" : "#22c55e55",
-            color: isDirty ? "#ef4444" : "#16a34a",
-          }}
-        >
-          <Icon name={isDirty ? "warning" : "success"} size={16} />
-          <span className="grow">
-            <strong>{classification.classifier_label}</strong> — {confidencePct}% confidence
-            {hasDisagreement && <> · <strong>flagged:</strong> {classification.disagreement_flag}</>}
-          </span>
-          <span className="hint" style={{ fontSize: 11 }}>{timeAgo(classification.recorded_at)}</span>
-        </div>
-      )}
 
       {!deviceMac ? (
         <div className="empty" style={{ padding: "28px 20px" }}>

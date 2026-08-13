@@ -668,7 +668,7 @@ export default function DevicesScreen() {
 
         const { data: rfidLogs, error: rfidError } = await supabase.from("sensor_logs")
           .select("recorded_at, rfid").eq("device_id", dev.id)
-          .not("rfid", "is", null).order("recorded_at", { ascending: false }).limit(100);
+          .not("rfid", "is", null).neq("rfid", "").order("recorded_at", { ascending: false }).limit(100);
         if (rfidError) console.warn(`rfid logs (${dev.id}):`, rfidError.message);
 
         if (rfidLogs?.length > 0) {

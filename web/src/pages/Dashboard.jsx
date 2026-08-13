@@ -12,7 +12,7 @@ import { supabase } from "../lib/supabase";
 import { useScope } from "../context/ScopeContext";
 import { formatIntervalLabel, getTimeOfDay, timeAgo } from "../lib/format";
 import {
-  ALL_METRICS, CARDS_STORAGE_KEY, DEFAULT_CARD_KEYS, METRICS, TIME_RANGES,
+  ALL_METRICS, BRAND_BLUE, CARDS_STORAGE_KEY, DEFAULT_CARD_KEYS, METRICS, TIME_RANGES,
   computeHvacMetrics, getRangeStatus, getStatusColor, getStatusLabel, parseTs, toDisplay,
 } from "../lib/metrics";
 import { DEFAULT_FILTER_INTERVAL_DAYS } from "../lib/config";
@@ -278,6 +278,19 @@ export default function Dashboard() {
 
   return (
     <>
+      <div className="dashboard-wave-bg" aria-hidden="true">
+        <svg viewBox="0 0 1200 500" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+          <path
+            d="M -50 260 C 100 120, 250 400, 400 250 S 700 100, 850 260 S 1150 400, 1300 250"
+            fill="none" strokeWidth="2" opacity="0.4"
+          />
+          <path
+            d="M -50 290 C 150 420, 300 130, 500 290 S 800 420, 950 290 S 1250 130, 1350 290"
+            fill="none" strokeWidth="1.4" opacity="0.26"
+          />
+        </svg>
+      </div>
+
       <header className="topbar topbar-gradient">
         <div className="topbar-titles">
           <div className="topbar-eyebrow">Good {getTimeOfDay()}</div>
@@ -347,7 +360,7 @@ export default function Dashboard() {
             <div className="dash-split">
               {/* ── Left column ─────────────────────────────────────────── */}
               <div className="col" style={{ gap: 18 }}>
-                <section className="card card-pad">
+                <section className="card card-pad card-lift">
                   <div className="row wrap" style={{ marginBottom: 15 }}>
                     <span className="dot" style={{ background: metric.color, width: 10, height: 10 }} />
                     <h3 className="section-title grow">{metric.label}</h3>
@@ -514,7 +527,7 @@ function MetricDetailModal({ metric, stats, latest, pct, onClose }) {
         style={{
           background: "var(--inputBg)",
           border: "1px solid var(--border)",
-          borderTop: `3px solid ${metric.color}`,
+          borderTop: `3px solid ${BRAND_BLUE}`,
           borderRadius: 14, padding: 22, textAlign: "center",
         }}
       >
@@ -611,11 +624,11 @@ function EditCardsModal({ open, onClose, keys, onSave }) {
                 key={key}
                 className="row"
                 style={{
-                  background: `${m.color}16`, border: `1px solid ${m.color}3a`,
+                  background: `${BRAND_BLUE}16`, border: `1px solid ${BRAND_BLUE}3a`,
                   borderRadius: 12, padding: "9px 11px",
                 }}
               >
-                <span className="list-icon" style={{ width: 28, height: 28, background: `${m.color}26`, color: m.color }}>
+                <span className="list-icon" style={{ width: 28, height: 28, background: `${BRAND_BLUE}26`, color: BRAND_BLUE }}>
                   <Icon name={m.icon} size={14} />
                 </span>
                 <span className="grow" style={{ fontSize: 13.5, fontWeight: 600 }}>{m.label}</span>
@@ -649,7 +662,7 @@ function EditCardsModal({ open, onClose, keys, onSave }) {
                   borderRadius: 12, padding: "9px 11px", width: "100%", textAlign: "left",
                 }}
               >
-                <span className="list-icon" style={{ width: 28, height: 28, background: `${m.color}26`, color: m.color }}>
+                <span className="list-icon" style={{ width: 28, height: 28, background: `${BRAND_BLUE}26`, color: BRAND_BLUE }}>
                   <Icon name={m.icon} size={14} />
                 </span>
                 <span className="grow" style={{ fontSize: 13.5, fontWeight: 600 }}>{m.label}</span>
@@ -695,7 +708,7 @@ function AdvancedModal({ open, onClose, averages, ductArea }) {
           <div className="col gap-sm">
             {rows.map((r) => (
               <div key={r.label} className="row" style={{ alignItems: "flex-start", background: "var(--inputBg)", border: "1px solid var(--border)", borderRadius: 13, padding: 14 }}>
-                <span className="list-icon" style={{ color: "#6366f1", background: "#6366f11f" }}>
+                <span className="list-icon" style={{ color: BRAND_BLUE, background: `${BRAND_BLUE}1f` }}>
                   <Icon name={r.icon} size={17} />
                 </span>
                 <div className="grow">

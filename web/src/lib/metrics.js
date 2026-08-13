@@ -14,6 +14,12 @@ export function toDisplay(key, raw) {
 }
 
 // ── Metric catalogue (units and normalRange are in DISPLAY units) ────────────
+// `color` is the metric's own chart identity (line/bar/legend/selector) --
+// distinct per metric so the graph itself stays readable. UI chrome (metric
+// cards, buttons, headers) intentionally does NOT use this field -- it uses
+// BRAND_BLUE instead, so it stays on-brand no matter which metric is plotted.
+export const BRAND_BLUE = "#007BFF";
+
 export const ALL_METRICS = [
   { label: "Temperature",        key: "temp_c",            unit: "°F",     icon: "thermometer", color: "#FF6B6B", normalRange: [64, 79],    decimals: 1 },
   { label: "Humidity",           key: "humidity",          unit: "%",      icon: "droplet",     color: "#45B7D1", normalRange: [30, 60],    decimals: 1 },

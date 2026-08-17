@@ -445,7 +445,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
                     )}
                   </div>
                   <ResponsiveContainer width="100%" height={190}>
-                    <ComposedChart data={isolatedSpectrum} barCategoryGap="12%" margin={{ top: 4, right: 8, left: 0, bottom: 18 }}>
+                    <ComposedChart data={isolatedSpectrum} barCategoryGap="35%" margin={{ top: 4, right: 8, left: 0, bottom: 18 }}>
                       <defs>
                         <linearGradient id="spectrumFill" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor={theme.accent} stopOpacity={0.95} />
@@ -460,11 +460,16 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
                         minTickGap={24}
                         label={{ value: "Frequency (Hz)", position: "insideBottom", offset: -12, fill: theme.subtext, fontSize: 10.5, fontWeight: 600 }}
                       />
+                      {/* No axis title here on purpose -- with only ~46px of
+                          width, a rotated "Magnitude (dB)" label collided
+                          with the tick numbers (rendered as unreadable
+                          overlapping text). The tooltip already labels
+                          values in dB, and the section header above the
+                          chart gives the rest of the context. */}
                       <YAxis
                         domain={[-100, 0]}
                         tick={{ fill: theme.subtext, fontSize: 10, fontWeight: 600 }}
-                        tickLine={false} axisLine={false} width={46}
-                        label={{ value: "Magnitude (dB)", angle: -90, position: "insideLeft", offset: 6, fill: theme.subtext, fontSize: 10.5, fontWeight: 600 }}
+                        tickLine={false} axisLine={false} width={34}
                       />
                       <Tooltip
                         cursor={{ fill: theme.divider, opacity: 0.3 }}
@@ -472,7 +477,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
                         formatter={(v, name) => [`${v.toFixed(1)} dB`, name === "baselineDb" ? "baseline" : "now"]}
                         labelFormatter={(f) => (f >= 1000 ? `${(f / 1000).toFixed(2)} kHz` : `${f} Hz`)}
                       />
-                      <Bar dataKey="db" fill="url(#spectrumFill)" isAnimationActive={false} />
+                      <Bar dataKey="db" fill="url(#spectrumFill)" barSize={5} radius={[1, 1, 0, 0]} isAnimationActive={false} />
                       {baselineSpectrum && (
                         <Line
                           type="monotone" dataKey="baselineDb"

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import Icon from "./Icon";
 import { useTheme } from "../context/ThemeContext";
 import { formatSeconds, timeAgo, formatTimestamp } from "../lib/format";
-import { getLatestRecording, computePeaks, computeSpectrum, normalizeMfcc } from "../lib/audioRecordings";
+import { getLatestRecording, getBaselineSpectrum, computePeaks, computeSpectrum, normalizeMfcc } from "../lib/audioRecordings";
 
 // ============================================================================
 // Acoustic Data — real recordings from audio_logs / hvac-recordings storage,
@@ -60,6 +60,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
 
   const [peaks, setPeaks] = useState([]);
   const [spectrum, setSpectrum] = useState([]);
+  const [baselineSpectrum, setBaselineSpectrum] = useState(null); // null = none accumulated yet
   const [duration, setDuration] = useState(0);
   const [audioLoading, setAudioLoading] = useState(false);
   const [audioError, setAudioError] = useState(null);
@@ -84,17 +85,22 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
     cancelAnimationFrame(rafRef.current);
   }, []);
 
-  // Fetch the audio_logs row (and mint a signed URL, if applicable) whenever
-  // the device changes.
+  // Fetch the audio_logs row (and mint a signed URL, if applicable) and the
+  // device's baseline spectrum (if it's accumulated one yet) whenever the
+  // device changes.
   useEffect(() => {
     let cancelled = false;
     setRecording(undefined);
     setLoadError(null);
+    setBaselineSpectrum(null);
     (async () => {
       if (!deviceMac) { if (!cancelled) setRecording(null); return; }
       try {
-        const rec = await getLatestRecording(deviceMac);
-        if (!cancelled) setRecording(rec);
+        const [rec, baseline] = await Promise.all([
+          getLatestRecording(deviceMac),
+          getBaselineSpectrum(deviceMac),
+        ]);
+        if (!cancelled) { setRecording(rec); setBaselineSpectrum(baseline); }
       } catch (e) {
         if (!cancelled) { setLoadError(e.message || "Couldn't load recording"); setRecording(null); }
       }
@@ -228,9 +234,15 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
     [recording]
   );
   // See ISOLATED_BAND_MAX_HZ's comment for why this range specifically.
+  // baselineSpectrum.db[i] lines up with spectrum[i] by index, not by
+  // frequency value -- both sides use the identical log-spaced bin scheme
+  // (see spectrum_viz.py's module docstring), so this merge is exact, not
+  // an approximation.
   const isolatedSpectrum = useMemo(
-    () => spectrum.filter((p) => p.freq <= ISOLATED_BAND_MAX_HZ),
-    [spectrum]
+    () => spectrum
+      .map((p, i) => ({ freq: p.freq, db: p.db, baselineDb: baselineSpectrum?.db?.[i] ?? null }))
+      .filter((p) => p.freq <= ISOLATED_BAND_MAX_HZ),
+    [spectrum, baselineSpectrum]
   );
 
   const classification = recording?.classification || null;
@@ -411,16 +423,29 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
                     >
                       FREQUENCY SPECTRUM · 20–500 Hz
                     </div>
-                    <span
-                      className="hint"
-                      style={{ fontSize: 10.5 }}
-                      title="No historical spectrum is stored for this device yet, so there's nothing real to compare against -- audio_logs only ever holds the latest recording, not a history."
-                    >
-                      baseline not available yet
-                    </span>
+                    {baselineSpectrum ? (
+                      <div className="row" style={{ gap: 12 }}>
+                        <span className="hint" style={{ fontSize: 10.5, display: "flex", alignItems: "center", gap: 5 }}>
+                          <span style={{ width: 9, height: 9, borderRadius: 2, background: theme.accent, display: "inline-block" }} />
+                          now
+                        </span>
+                        <span className="hint" style={{ fontSize: 10.5, display: "flex", alignItems: "center", gap: 5 }}>
+                          <span style={{ width: 9, height: 2, background: theme.subtext, display: "inline-block" }} />
+                          baseline · {baselineSpectrum.n} reading{baselineSpectrum.n === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                    ) : (
+                      <span
+                        className="hint"
+                        style={{ fontSize: 10.5 }}
+                        title="This device hasn't accumulated a baseline spectrum yet -- built the same way as its drift baseline, from its first warmup readings (ML/service/poll_and_infer.py)."
+                      >
+                        baseline not available yet
+                      </span>
+                    )}
                   </div>
                   <ResponsiveContainer width="100%" height={190}>
-                    <BarChart data={isolatedSpectrum} barCategoryGap="12%" margin={{ top: 4, right: 8, left: 0, bottom: 18 }}>
+                    <ComposedChart data={isolatedSpectrum} barCategoryGap="12%" margin={{ top: 4, right: 8, left: 0, bottom: 18 }}>
                       <defs>
                         <linearGradient id="spectrumFill" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor={theme.accent} stopOpacity={0.95} />
@@ -444,11 +469,18 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
                       <Tooltip
                         cursor={{ fill: theme.divider, opacity: 0.3 }}
                         contentStyle={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 10, fontSize: 12 }}
-                        formatter={(v) => [`${v.toFixed(1)} dB`, ""]}
+                        formatter={(v, name) => [`${v.toFixed(1)} dB`, name === "baselineDb" ? "baseline" : "now"]}
                         labelFormatter={(f) => (f >= 1000 ? `${(f / 1000).toFixed(2)} kHz` : `${f} Hz`)}
                       />
                       <Bar dataKey="db" fill="url(#spectrumFill)" isAnimationActive={false} />
-                    </BarChart>
+                      {baselineSpectrum && (
+                        <Line
+                          type="monotone" dataKey="baselineDb"
+                          stroke={theme.subtext} strokeWidth={1.6} strokeDasharray="4 3"
+                          dot={false} isAnimationActive={false}
+                        />
+                      )}
+                    </ComposedChart>
                   </ResponsiveContainer>
                 </div>
               )}

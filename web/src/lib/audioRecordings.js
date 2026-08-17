@@ -34,6 +34,25 @@ async function getLatestClassification(deviceMac) {
   return data;
 }
 
+// Baseline frequency spectrum -- a running average (dB, same 72 log-spaced
+// bins as computeSpectrum() below, same order) accumulated by
+// ML/service/poll_and_infer.py across a device's warmup readings, using the
+// exact same gate/freeze point as its 5-feature drift baseline. Returns
+// null until that's accumulated at least one reading -- same "don't
+// fabricate it" rule as everywhere else in this file. Index i here lines
+// up with index i of computeSpectrum()'s output; both sides use the same
+// bin scheme (see spectrum_viz.py's module docstring for the Python side).
+export async function getBaselineSpectrum(deviceMac) {
+  if (!deviceMac) return null;
+  const { data, error } = await supabase
+    .from("device_baselines")
+    .select("baseline_spectrum_db, spectrum_n")
+    .eq("device_mac", deviceMac)
+    .maybeSingle();
+  if (error || !data || !data.baseline_spectrum_db) return null;
+  return { db: data.baseline_spectrum_db, n: data.spectrum_n };
+}
+
 // Returns null if there's no recording yet, otherwise:
 //   { kind: "audio", updatedAt, url, classification }   — WiFi device, playable
 //   { kind: "lora",  updatedAt, mfcc, classification }  — LoRaWAN device, features only

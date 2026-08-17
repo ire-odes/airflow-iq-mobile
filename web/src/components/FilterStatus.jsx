@@ -41,6 +41,7 @@ export default function FilterStatus({ deviceIds, fallbackIntervalDays = DEFAULT
         .select("recorded_at, rfid, device_id")
         .in("device_id", deviceIds)
         .not("rfid", "is", null)
+        .neq("rfid", "")
         .order("recorded_at", { ascending: true });
 
       if (cancelled) return;

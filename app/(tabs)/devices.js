@@ -105,6 +105,44 @@ function AcousticVerdictBadge({ mlVerdict }) {
   );
 }
 
+// Battery is a raw cell voltage. The firmware's usable window is 1.8V
+// (regulator cutoff) -> 3.0V (full cell) -- see pctFromBatt() in the
+// hardware calibration sketch. A precise percentage reads noisier than it
+// is (cell voltage sags under load), so instead of a number we split the
+// window into four even 0.3V bands and show a stepped bar graphic.
+const BATTERY_STAGES = [
+  { min: 2.7,        bars: 4, label: "Full",     color: "#22c55e" },
+  { min: 2.4,        bars: 3, label: "Medium",   color: "#f59e0b" },
+  { min: 2.1,        bars: 2, label: "Low",      color: "#f97316" },
+  { min: -Infinity,  bars: 1, label: "Critical", color: "#ef4444" },
+];
+
+function getBatteryStage(voltage) {
+  if (voltage == null) return null;
+  return BATTERY_STAGES.find((s) => voltage >= s.min);
+}
+
+function BatteryStageIcon({ stage, theme }) {
+  if (!stage) return null;
+  return (
+    <View style={battStyles.wrap}>
+      <View style={[battStyles.body, { borderColor: theme.border }]}>
+        {[1, 2, 3, 4].map((i) => (
+          <View key={i} style={[battStyles.bar, { backgroundColor: i <= stage.bars ? stage.color : "transparent" }]} />
+        ))}
+      </View>
+      <View style={[battStyles.nub, { backgroundColor: theme.border }]} />
+    </View>
+  );
+}
+
+const battStyles = StyleSheet.create({
+  wrap: { flexDirection: "row", alignItems: "center" },
+  body: { flexDirection: "row", width: 22, height: 12, borderWidth: 1.3, borderRadius: 3, padding: 1.5, gap: 1.5 },
+  bar: { flex: 1, borderRadius: 1 },
+  nub: { width: 2, height: 6, borderRadius: 1, marginLeft: 1 },
+});
+
 // ── Claim Modal ───────────────────────────────────────────────────────────────
 function ClaimDeviceModal({ visible, onClose, onClaimed, theme }) {
   const { session } = useAuth();
@@ -496,11 +534,7 @@ function DeviceCard({ device, onEdit, onDelete, onRecalibrate, index, theme, las
   const wakeLabel = wakeSeconds < 60 ? `${wakeSeconds}s` : wakeSeconds < 3600 ? `${wakeSeconds / 60}m` : `${wakeSeconds / 3600}h`;
 
   const battVoltage = latestData?.battery;
-  const battPct = battVoltage != null
-    ? Math.min(100, Math.max(0, Math.round(((battVoltage - 2.8) / (3.2 - 2.8)) * 100)))
-    : null;
-  const battColor = battPct == null ? "#9ca3af" : battPct <= 10 ? "#ef4444" : battPct <= 25 ? "#f97316" : battPct <= 50 ? "#f59e0b" : "#22c55e";
-  const battIcon = battPct == null ? "battery-dead-outline" : battPct <= 10 ? "battery-dead" : battPct <= 25 ? "battery-dead-outline" : battPct <= 50 ? "battery-half" : "battery-full";
+  const battStage = getBatteryStage(battVoltage);
 
   return (
     <View style={[styles.card, { backgroundColor: theme.card }]}>
@@ -533,10 +567,9 @@ function DeviceCard({ device, onEdit, onDelete, onRecalibrate, index, theme, las
               <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
               <Text style={[styles.statusLabel, { color: statusColor }]}>{statusLabel}</Text>
             </View>
-            {battPct != null && (
-              <View style={styles.battBadge}>
-                <Ionicons name={battIcon} size={13} color={battColor} />
-                <Text style={[styles.battText, { color: battColor }]}>{battPct}%</Text>
+            {battStage && (
+              <View style={styles.battBadge} accessibilityLabel={`Battery: ${battStage.label}`}>
+                <BatteryStageIcon stage={battStage} theme={theme} />
               </View>
             )}
           </View>
@@ -649,7 +682,7 @@ export default function DevicesScreen() {
 
         const { data: rfidLogs, error: rfidError } = await supabase.from("sensor_logs")
           .select("recorded_at, rfid").eq("device_id", dev.id)
-          .not("rfid", "is", null).order("recorded_at", { ascending: false }).limit(100);
+          .not("rfid", "is", null).neq("rfid", "").order("recorded_at", { ascending: false }).limit(100);
         if (rfidError) console.warn(`rfid logs (${dev.id}):`, rfidError.message);
 
         if (rfidLogs?.length > 0) {
@@ -876,7 +909,6 @@ const styles = StyleSheet.create({
   statusDot: { width: 6, height: 6, borderRadius: 3 },
   statusLabel: { fontSize: 11, fontWeight: "700" },
   battBadge: { flexDirection: "row", alignItems: "center", gap: 3 },
-  battText: { fontSize: 11, fontWeight: "700" },
   lastSeen: { fontSize: 11, fontWeight: "500" },
   filterInfoRow: { flexDirection: "row", borderRadius: 12, padding: 10, gap: 12 },
   filterInfoItem: { flexDirection: "row", alignItems: "center", gap: 4, flex: 1 },

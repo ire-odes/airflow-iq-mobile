@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import Icon from "./Icon";
 import { useTheme } from "../context/ThemeContext";
 import { formatSeconds, timeAgo, formatTimestamp } from "../lib/format";
-import { getLatestRecording, computePeaks, normalizeMfcc } from "../lib/audioRecordings";
+import { getLatestRecording, computePeaks, computeSpectrum, normalizeMfcc } from "../lib/audioRecordings";
 
 // ============================================================================
 // Acoustic Data — real recordings from audio_logs / hvac-recordings storage,
@@ -20,6 +21,20 @@ import { getLatestRecording, computePeaks, normalizeMfcc } from "../lib/audioRec
 // ============================================================================
 
 const WAVE_BINS = 190;
+const TRIM_LEADING_SECONDS = 0.05; // drop the mic-startup click at the very start of the clip
+
+// Returns a new AudioBuffer with the first `seconds` removed from every
+// channel — used once, right after decode, so the waveform, duration, and
+// playback all agree on the trimmed clip.
+function trimBufferStart(ctx, buffer, seconds) {
+  const trimSamples = Math.min(Math.floor(seconds * buffer.sampleRate), buffer.length - 1);
+  if (trimSamples <= 0) return buffer;
+  const trimmed = ctx.createBuffer(buffer.numberOfChannels, buffer.length - trimSamples, buffer.sampleRate);
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+    trimmed.getChannelData(ch).set(buffer.getChannelData(ch).subarray(trimSamples));
+  }
+  return trimmed;
+}
 
 export default function AcousticPanel({ deviceMac, deviceName }) {
   const { theme } = useTheme();
@@ -28,6 +43,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
   const [loadError, setLoadError] = useState(null);
 
   const [peaks, setPeaks] = useState([]);
+  const [spectrum, setSpectrum] = useState([]);
   const [duration, setDuration] = useState(0);
   const [audioLoading, setAudioLoading] = useState(false);
   const [audioError, setAudioError] = useState(null);
@@ -89,6 +105,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
     setElapsed(0);
     offsetRef.current = 0;
     setPeaks([]);
+    setSpectrum([]);
     setDuration(0);
     setAudioError(null);
     bufferRef.current = null;
@@ -101,10 +118,12 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
         const res = await fetch(recording.url);
         if (!res.ok) throw new Error(`Recording fetch failed (${res.status})`);
         const arrayBuf = await res.arrayBuffer();
-        const buffer = await ctxRef.current.decodeAudioData(arrayBuf);
+        const decoded = await ctxRef.current.decodeAudioData(arrayBuf);
+        const buffer = trimBufferStart(ctxRef.current, decoded, TRIM_LEADING_SECONDS);
         if (cancelled) return;
         bufferRef.current = buffer;
         setPeaks(computePeaks(buffer, WAVE_BINS));
+        setSpectrum(computeSpectrum(buffer));
         setDuration(buffer.duration);
       } catch (e) {
         if (!cancelled) setAudioError(e.message || "Couldn't load recording");
@@ -211,7 +230,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
     && !["none", "false", "no"].includes(String(classification.disagreement_flag).toLowerCase());
 
   return (
-    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <section className="card card-pad card-lift" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div className="row" style={{ alignItems: "flex-start" }}>
         <div className="property-icon"><Icon name="waveform" size={18} /></div>
         <div className="grow">
@@ -227,9 +246,16 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
               <Icon name="pulse" size={11} /> Calibrating…
             </span>
           ) : classification ? (
-            <span className="badge" style={{ background: isDirty ? "#ef44441f" : "#22c55e1f", color: isDirty ? "#ef4444" : "#22c55e" }}>
+            <span
+              className="badge"
+              style={{ background: isDirty ? "#ef44441f" : "#22c55e1f", color: isDirty ? "#ef4444" : "#22c55e" }}
+              title={
+                `${classification.classifier_label} · clf ${confidencePct}% dirty · ${timeAgo(classification.recorded_at)}`
+                + (hasDisagreement ? ` · flagged: ${classification.disagreement_flag}` : "")
+              }
+            >
               <Icon name={isDirty ? "warning" : "success"} size={11} />
-              {isDirty ? "Filter Dirty" : "Filter Clean"} · clf {confidencePct}% dirty
+              {isDirty ? "Filter Dirty" : "Filter Clean"}
             </span>
           ) : (
             <span className="badge" style={{ background: "#6366f11f", color: "#6366f1" }}>
@@ -247,24 +273,6 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
             collected enough readings. This can take a while after a device is claimed, moved,
             or recalibrated.
           </span>
-        </div>
-      )}
-
-      {classification && !isCalibrating && (
-        <div
-          className="banner"
-          style={{
-            background: isDirty ? "#ef44441a" : "#22c55e1a",
-            borderColor: isDirty ? "#ef444455" : "#22c55e55",
-            color: isDirty ? "#ef4444" : "#16a34a",
-          }}
-        >
-          <Icon name={isDirty ? "warning" : "success"} size={16} />
-          <span className="grow">
-            <strong>{classification.classifier_label}</strong> — clf {confidencePct}% dirty
-            {hasDisagreement && <> · <strong>flagged:</strong> {classification.disagreement_flag}</>}
-          </span>
-          <span className="hint" style={{ fontSize: 11 }}>{timeAgo(classification.recorded_at)}</span>
         </div>
       )}
 
@@ -372,6 +380,56 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
                 <span className="grow" />
                 <span className="hint" style={{ fontSize: 11.5 }}>{formatTimestamp(recording.updatedAt)}</span>
               </div>
+
+              {spectrum.length > 0 && (
+                <div style={{ marginTop: 18 }}>
+                  <div className="row" style={{ marginBottom: 8 }}>
+                    <div className="field-label grow">FREQUENCY SPECTRUM</div>
+                    <span
+                      className="hint"
+                      style={{ fontSize: 10.5 }}
+                      title="No historical spectrum is stored for this device yet, so there's nothing real to compare against -- audio_logs only ever holds the latest recording, not a history."
+                    >
+                      baseline not available yet
+                    </span>
+                  </div>
+                  <ResponsiveContainer width="100%" height={190}>
+                    <AreaChart data={spectrum} margin={{ top: 4, right: 8, left: 0, bottom: 18 }}>
+                      <defs>
+                        <linearGradient id="spectrumFill" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={theme.accent} stopOpacity={0.35} />
+                          <stop offset="100%" stopColor={theme.accent} stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="4 4" stroke={theme.divider} vertical={false} />
+                      <XAxis
+                        dataKey="freq" tickLine={false} axisLine={{ stroke: theme.divider }}
+                        tick={{ fill: theme.subtext, fontSize: 10, fontWeight: 600 }}
+                        tickFormatter={(f) => (f >= 1000 ? `${(f / 1000).toFixed(1)}k` : f)}
+                        minTickGap={28}
+                        label={{ value: "Frequency (Hz)", position: "insideBottom", offset: -12, fill: theme.subtext, fontSize: 10.5, fontWeight: 600 }}
+                      />
+                      <YAxis
+                        tick={{ fill: theme.subtext, fontSize: 10, fontWeight: 600 }}
+                        tickLine={false} axisLine={false} width={46}
+                        label={{ value: "Magnitude (dB)", angle: -90, position: "insideLeft", offset: 6, fill: theme.subtext, fontSize: 10.5, fontWeight: 600 }}
+                      />
+                      <Tooltip
+                        cursor={{ stroke: theme.divider }}
+                        contentStyle={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 10, fontSize: 12 }}
+                        formatter={(v) => [`${v.toFixed(1)} dB`, ""]}
+                        labelFormatter={(f) => (f >= 1000 ? `${(f / 1000).toFixed(2)} kHz` : `${f} Hz`)}
+                      />
+                      <Area
+                        type="monotone" dataKey="db"
+                        stroke={theme.accent} strokeWidth={1.6}
+                        fill="url(#spectrumFill)"
+                        isAnimationActive={false}
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </div>
           )}
         </>

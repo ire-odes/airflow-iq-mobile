@@ -14,6 +14,12 @@ export function toDisplay(key, raw) {
 }
 
 // ── Metric catalogue (units and normalRange are in DISPLAY units) ────────────
+// `color` is the metric's own chart identity (line/bar/legend/selector) --
+// distinct per metric so the graph itself stays readable. UI chrome (metric
+// cards, buttons, headers) intentionally does NOT use this field -- it uses
+// BRAND_BLUE instead, so it stays on-brand no matter which metric is plotted.
+export const BRAND_BLUE = "#007BFF";
+
 export const ALL_METRICS = [
   { label: "Temperature",        key: "temp_c",            unit: "°F",     icon: "thermometer", color: "#FF6B6B", normalRange: [64, 79],    decimals: 1 },
   { label: "Humidity",           key: "humidity",          unit: "%",      icon: "droplet",     color: "#45B7D1", normalRange: [30, 60],    decimals: 1 },
@@ -104,6 +110,23 @@ export function getOnlineStatus(lastSeen) {
   if (diff < 10 * 60 * 1000) return "online";
   if (diff < 60 * 60 * 1000) return "idle";
   return "offline";
+}
+
+// Battery is a raw cell voltage. The firmware's usable window is 1.8V
+// (regulator cutoff) -> 3.0V (full cell) -- see pctFromBatt() in the
+// hardware calibration sketch. A precise percentage reads noisier than it
+// is (cell voltage sags under load), so instead of a number the UI shows
+// a stepped bar graphic across four even 0.3V bands.
+export const BATTERY_STAGES = [
+  { min: 2.7,       bars: 4, label: "Full",     color: "#22c55e" },
+  { min: 2.4,       bars: 3, label: "Medium",   color: "#f59e0b" },
+  { min: 2.1,       bars: 2, label: "Low",      color: "#f97316" },
+  { min: -Infinity, bars: 1, label: "Critical", color: "#ef4444" },
+];
+
+export function getBatteryStage(voltage) {
+  if (voltage == null) return null;
+  return BATTERY_STAGES.find((s) => voltage >= s.min);
 }
 
 export function getFilterProgress(installedAt, intervalDays) {

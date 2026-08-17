@@ -88,6 +88,80 @@ export function computePeaks(buffer, bins = 220) {
   return max > 0 ? peaks.map((p) => p / max) : peaks;
 }
 
+// ── Frequency spectrum (real FFT of the decoded recording) ──────────────────
+// In-house radix-2 Cooley-Tukey FFT -- no DSP library in this project, and
+// this is the only place that needs one. Operates on parallel re/im arrays
+// in place, length must be a power of 2.
+function fft(re, im) {
+  const n = re.length;
+  if (n <= 1) return;
+  const half = n / 2;
+  const evenRe = new Float64Array(half), evenIm = new Float64Array(half);
+  const oddRe = new Float64Array(half), oddIm = new Float64Array(half);
+  for (let i = 0; i < half; i++) {
+    evenRe[i] = re[2 * i]; evenIm[i] = im[2 * i];
+    oddRe[i] = re[2 * i + 1]; oddIm[i] = im[2 * i + 1];
+  }
+  fft(evenRe, evenIm);
+  fft(oddRe, oddIm);
+  for (let k = 0; k < half; k++) {
+    const angle = (-2 * Math.PI * k) / n;
+    const cos = Math.cos(angle), sin = Math.sin(angle);
+    const tRe = cos * oddRe[k] - sin * oddIm[k];
+    const tIm = sin * oddRe[k] + cos * oddIm[k];
+    re[k] = evenRe[k] + tRe;
+    im[k] = evenIm[k] + tIm;
+    re[k + half] = evenRe[k] - tRe;
+    im[k + half] = evenIm[k] - tIm;
+  }
+}
+
+const nextPow2 = (n) => 1 << Math.ceil(Math.log2(n));
+
+// Magnitude spectrum (in dB) of a decoded AudioBuffer, log-frequency-binned
+// so low-frequency HVAC content isn't crushed into a couple of pixels next
+// to a long, mostly-empty high-frequency tail. Uses Welch's method (Hann-
+// windowed, 50%-overlapping frames, averaged) for a stable estimate from a
+// single short clip rather than one noisy full-length transform. Real FFT
+// of the actual recording -- nothing here is simulated or guessed.
+export function computeSpectrum(buffer, { frameSize = 2048, bins = 72, fMin = 20 } = {}) {
+  const data = buffer.getChannelData(0);
+  const sampleRate = buffer.sampleRate;
+  const nyquist = sampleRate / 2;
+
+  const n = nextPow2(frameSize);
+  const hop = Math.floor(n / 2);
+  const window = new Float64Array(n);
+  for (let i = 0; i < n; i++) window[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1));
+
+  const accum = new Float64Array(n / 2);
+  let frames = 0;
+
+  for (let start = 0; start + n <= data.length; start += hop) {
+    const re = new Float64Array(n), im = new Float64Array(n);
+    for (let i = 0; i < n; i++) re[i] = data[start + i] * window[i];
+    fft(re, im);
+    for (let k = 0; k < n / 2; k++) accum[k] += Math.hypot(re[k], im[k]);
+    frames++;
+  }
+  if (frames === 0) return [];
+
+  const logMin = Math.log10(Math.max(fMin, 1));
+  const logMax = Math.log10(nyquist);
+  const out = [];
+  for (let b = 0; b < bins; b++) {
+    const f0 = Math.pow(10, logMin + ((logMax - logMin) * b) / bins);
+    const f1 = Math.pow(10, logMin + ((logMax - logMin) * (b + 1)) / bins);
+    const k0 = Math.max(0, Math.floor((f0 / nyquist) * (n / 2)));
+    const k1 = Math.min(n / 2, Math.ceil((f1 / nyquist) * (n / 2)));
+    let sum = 0, count = 0;
+    for (let k = k0; k < k1; k++) { sum += accum[k]; count++; }
+    const mag = count > 0 ? sum / count / frames : 0;
+    out.push({ freq: Math.round((f0 + f1) / 2), db: Math.max(20 * Math.log10(mag + 1e-9), -100) });
+  }
+  return out;
+}
+
 // Flattens mfcc_coefficients into one representative array for a simple bar
 // chart. Tolerant of shape because no real LoRa row has been observed yet
 // (0 exist in production as of this writing) — could be a flat array of

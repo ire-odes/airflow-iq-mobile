@@ -157,6 +157,31 @@ p { margin: 0; }
 
 .page { padding: 26px 32px 56px; max-width: 1560px; }
 
+/* ── Dashboard waveform backdrop ───────────────────────────────────────────────
+   Faint decorative layer, themed via waveformFrom/To/Glow/Stroke (see
+   ThemeContext) -- a black gradient in dark mode, a soft white-to-pale-blue
+   one in light mode, both with a blue glow band, fine scanline texture, and
+   crossing wave lines on top. Fixed + negative z-index so it sits behind the
+   sidebar, topbar and cards without needing position/z-index changes
+   anywhere else; only peeks through in the gaps between cards. */
+.dashboard-wave-bg {
+  position: fixed; inset: 0; z-index: -1;
+  pointer-events: none;
+  opacity: var(--waveformOpacity);
+  transition: opacity 0.25s ease, background 0.25s ease;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--waveformGlow) 30%, transparent) 0,
+      color-mix(in srgb, var(--waveformGlow) 30%, transparent) 1px,
+      transparent 1px, transparent 4px
+    ),
+    radial-gradient(ellipse 70% 42% at 50% 55%, var(--waveformGlow), transparent 72%),
+    linear-gradient(180deg, var(--waveformFrom) 0%, var(--waveformTo) 50%, var(--waveformFrom) 100%);
+}
+.dashboard-wave-bg svg { width: 100%; height: 100%; display: block; }
+.dashboard-wave-bg svg path { stroke: var(--waveformStroke); }
+
 /* ── Primitives ────────────────────────────────────────────────────────────── */
 .card {
   background: var(--card);
@@ -165,6 +190,13 @@ p { margin: 0; }
   box-shadow: var(--shadow);
 }
 .card-pad { padding: 20px; }
+/* Stronger shadow + the same thin blue outline the metric cards use, for
+   components that need to visually lift off the dashboard's waveform
+   backdrop (the chart card, acoustic data). */
+.card-lift {
+  box-shadow: var(--shadowXl);
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+}
 
 .section-title { font-size: 17px; font-weight: 800; }
 .section-sub { font-size: 12.5px; color: var(--subtext); margin-top: 2px; }
@@ -329,37 +361,32 @@ p { margin: 0; }
 }
 
 /* ── Metric card ───────────────────────────────────────────────────────────────
-   Neutral surface — the metric's colour survives only as a small accent (a
-   thin top rule and the icon chip), not a colour block. Keeps a grid of
-   eight cards calm and lets the numbers read in plain, high-contrast text.  */
+   Neutral surface — no per-metric colour block or accent bar, just a thin
+   brand-blue outline. Keeps a grid of eight cards calm and lets the numbers
+   read in plain, high-contrast text; the metric's own colour is reserved
+   for the chart, not the card chrome. */
 .metric-card {
   position: relative; overflow: hidden; text-align: left;
   min-height: 152px; display: flex; flex-direction: column;
   padding: 16px 17px;
   border-radius: 16px;
   background: var(--card);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  box-shadow: var(--shadowXl);
   transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
-}
-/* Colour identity: a 3px rule across the top edge — the "small accent". */
-.metric-card::before {
-  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
-  background: var(--metric-color);
-  opacity: 0.9;
 }
 .metric-card:hover {
   transform: translateY(-2px);
-  box-shadow: var(--shadowLg);
-  border-color: color-mix(in srgb, var(--metric-color) 45%, var(--border));
+  box-shadow: var(--shadowXl);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
 }
 
 .metric-card-top { display: flex; align-items: center; gap: 9px; margin-bottom: auto; }
 .metric-icon {
   width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
   display: grid; place-items: center;
-  background: color-mix(in srgb, var(--metric-color) 14%, transparent);
-  color: var(--metric-color);
+  background: var(--inputBg);
+  color: var(--subtext);
 }
 .metric-label {
   font-size: 11px; font-weight: 700; flex: 1;
@@ -370,13 +397,17 @@ p { margin: 0; }
   padding: 3px 6px; border-radius: 7px;
   font-size: 10.5px; font-weight: 700;
 }
+.metric-value-row {
+  display: flex; align-items: baseline; gap: 6px;
+  margin-top: 14px; margin-bottom: 12px;
+}
 .metric-value {
   font-size: 32px; font-weight: 800; letter-spacing: -1.1px;
-  line-height: 1.1; margin-top: 14px; color: var(--text);
+  line-height: 1.1; color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 .metric-unit {
-  font-size: 12px; font-weight: 600; color: var(--subtext); margin-bottom: 12px;
+  font-size: 15px; font-weight: 700; color: var(--subtext);
 }
 .metric-minmax {
   display: flex; border-top: 1px solid var(--divider); padding-top: 10px;

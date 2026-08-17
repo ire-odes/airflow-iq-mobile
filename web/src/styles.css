@@ -190,9 +190,13 @@ p { margin: 0; }
   box-shadow: var(--shadow);
 }
 .card-pad { padding: 20px; }
-/* Stronger shadow for components that need to visually lift off the
-   dashboard's waveform backdrop (the chart card, acoustic data). */
-.card-lift { box-shadow: var(--shadowXl); }
+/* Stronger shadow + the same thin blue outline the metric cards use, for
+   components that need to visually lift off the dashboard's waveform
+   backdrop (the chart card, acoustic data). */
+.card-lift {
+  box-shadow: var(--shadowXl);
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+}
 
 .section-title { font-size: 17px; font-weight: 800; }
 .section-sub { font-size: 12.5px; color: var(--subtext); margin-top: 2px; }

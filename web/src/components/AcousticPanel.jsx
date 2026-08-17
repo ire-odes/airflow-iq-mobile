@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import Icon from "./Icon";
 import { useTheme } from "../context/ThemeContext";
 import { formatSeconds, timeAgo, formatTimestamp } from "../lib/format";
-import { getLatestRecording, computePeaks, normalizeMfcc } from "../lib/audioRecordings";
+import { getLatestRecording, computePeaks, computeSpectrum, normalizeMfcc } from "../lib/audioRecordings";
 
 // ============================================================================
 // Acoustic Data — real recordings from audio_logs / hvac-recordings storage,
@@ -36,6 +37,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
   const [loadError, setLoadError] = useState(null);
 
   const [peaks, setPeaks] = useState([]);
+  const [spectrum, setSpectrum] = useState([]);
   const [duration, setDuration] = useState(0);
   const [audioLoading, setAudioLoading] = useState(false);
   const [audioError, setAudioError] = useState(null);
@@ -97,6 +99,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
     setElapsed(0);
     offsetRef.current = 0;
     setPeaks([]);
+    setSpectrum([]);
     setDuration(0);
     setAudioError(null);
     bufferRef.current = null;
@@ -114,6 +117,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
         if (cancelled) return;
         bufferRef.current = buffer;
         setPeaks(computePeaks(buffer, WAVE_BINS));
+        setSpectrum(computeSpectrum(buffer));
         setDuration(buffer.duration);
       } catch (e) {
         if (!cancelled) setAudioError(e.message || "Couldn't load recording");
@@ -343,6 +347,56 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
                 <span className="grow" />
                 <span className="hint" style={{ fontSize: 11.5 }}>{formatTimestamp(recording.updatedAt)}</span>
               </div>
+
+              {spectrum.length > 0 && (
+                <div style={{ marginTop: 18 }}>
+                  <div className="row" style={{ marginBottom: 8 }}>
+                    <div className="field-label grow">FREQUENCY SPECTRUM</div>
+                    <span
+                      className="hint"
+                      style={{ fontSize: 10.5 }}
+                      title="No historical spectrum is stored for this device yet, so there's nothing real to compare against -- audio_logs only ever holds the latest recording, not a history."
+                    >
+                      baseline not available yet
+                    </span>
+                  </div>
+                  <ResponsiveContainer width="100%" height={190}>
+                    <AreaChart data={spectrum} margin={{ top: 4, right: 8, left: 0, bottom: 18 }}>
+                      <defs>
+                        <linearGradient id="spectrumFill" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={theme.accent} stopOpacity={0.35} />
+                          <stop offset="100%" stopColor={theme.accent} stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="4 4" stroke={theme.divider} vertical={false} />
+                      <XAxis
+                        dataKey="freq" tickLine={false} axisLine={{ stroke: theme.divider }}
+                        tick={{ fill: theme.subtext, fontSize: 10, fontWeight: 600 }}
+                        tickFormatter={(f) => (f >= 1000 ? `${(f / 1000).toFixed(1)}k` : f)}
+                        minTickGap={28}
+                        label={{ value: "Frequency (Hz)", position: "insideBottom", offset: -12, fill: theme.subtext, fontSize: 10.5, fontWeight: 600 }}
+                      />
+                      <YAxis
+                        tick={{ fill: theme.subtext, fontSize: 10, fontWeight: 600 }}
+                        tickLine={false} axisLine={false} width={46}
+                        label={{ value: "Magnitude (dB)", angle: -90, position: "insideLeft", offset: 6, fill: theme.subtext, fontSize: 10.5, fontWeight: 600 }}
+                      />
+                      <Tooltip
+                        cursor={{ stroke: theme.divider }}
+                        contentStyle={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 10, fontSize: 12 }}
+                        formatter={(v) => [`${v.toFixed(1)} dB`, ""]}
+                        labelFormatter={(f) => (f >= 1000 ? `${(f / 1000).toFixed(2)} kHz` : `${f} Hz`)}
+                      />
+                      <Area
+                        type="monotone" dataKey="db"
+                        stroke={theme.accent} strokeWidth={1.6}
+                        fill="url(#spectrumFill)"
+                        isAnimationActive={false}
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </div>
           )}
         </>

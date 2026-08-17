@@ -467,7 +467,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
                           values in dB, and the section header above the
                           chart gives the rest of the context. */}
                       <YAxis
-                        domain={[-50, 0]}
+                        domain={[-20, 50]}
                         allowDataOverflow
                         tick={{ fill: theme.subtext, fontSize: 10, fontWeight: 600 }}
                         tickLine={false} axisLine={false} width={34}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import Icon from "./Icon";
 import { useTheme } from "../context/ThemeContext";
 import { formatSeconds, timeAgo, formatTimestamp } from "../lib/format";
@@ -22,6 +22,22 @@ import { getLatestRecording, computePeaks, computeSpectrum, normalizeMfcc } from
 
 const WAVE_BINS = 190;
 const TRIM_LEADING_SECONDS = 0.05; // drop the mic-startup click at the very start of the clip
+
+// The spectrum chart is deliberately cropped to this range, not the full
+// 20 Hz-8 kHz computeSpectrum() produces. Real evidence, not a guess:
+//   - low_freq_energy_ratio (one of the 5 features the drift baseline is
+//     actually built on) is defined as exactly the 20-500 Hz energy
+//     fraction (ML/extract_features_v2.py)
+//   - the classifier's 3 highest-importance features of all 128 are the
+//     lowest-index FFT bands, landing at ~70-230 Hz
+//   - the lab clean-vs-dirty frequency study found its largest effect
+//     sizes (Cohen's d) clustered at 46-358 Hz, dwarfing a much smaller
+//     secondary cluster around 900-1000 Hz that isn't included here to
+//     keep this a single clean range rather than two clusters with a gap
+// With computeSpectrum's log-spaced binning, ~39 of its 72 bins already
+// fall in this range -- plenty dense for a bar view, no resolution change
+// needed upstream.
+const ISOLATED_BAND_MAX_HZ = 500;
 
 // Returns a new AudioBuffer with the first `seconds` removed from every
 // channel — used once, right after decode, so the waveform, duration, and
@@ -211,6 +227,11 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
     () => (recording?.kind === "lora" ? normalizeMfcc(recording.mfcc) : null),
     [recording]
   );
+  // See ISOLATED_BAND_MAX_HZ's comment for why this range specifically.
+  const isolatedSpectrum = useMemo(
+    () => spectrum.filter((p) => p.freq <= ISOLATED_BAND_MAX_HZ),
+    [spectrum]
+  );
 
   const classification = recording?.classification || null;
   // "calibrating" means the device hasn't finished its acoustic warmup --
@@ -381,10 +402,15 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
                 <span className="hint" style={{ fontSize: 11.5 }}>{formatTimestamp(recording.updatedAt)}</span>
               </div>
 
-              {spectrum.length > 0 && (
+              {isolatedSpectrum.length > 0 && (
                 <div style={{ marginTop: 18 }}>
                   <div className="row" style={{ marginBottom: 8 }}>
-                    <div className="field-label grow">FREQUENCY SPECTRUM</div>
+                    <div
+                      className="field-label grow"
+                      title="Cropped to 20-500 Hz on purpose: this is where the classifier's top features, the strongest lab clean-vs-dirty effect sizes, and low_freq_energy_ratio (one of the 5 features the drift baseline is built on) all concentrate -- see ISOLATED_BAND_MAX_HZ in this file."
+                    >
+                      FREQUENCY SPECTRUM · 20–500 Hz
+                    </div>
                     <span
                       className="hint"
                       style={{ fontSize: 10.5 }}
@@ -394,11 +420,11 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
                     </span>
                   </div>
                   <ResponsiveContainer width="100%" height={190}>
-                    <AreaChart data={spectrum} margin={{ top: 4, right: 8, left: 0, bottom: 18 }}>
+                    <BarChart data={isolatedSpectrum} barCategoryGap="12%" margin={{ top: 4, right: 8, left: 0, bottom: 18 }}>
                       <defs>
                         <linearGradient id="spectrumFill" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor={theme.accent} stopOpacity={0.35} />
-                          <stop offset="100%" stopColor={theme.accent} stopOpacity={0} />
+                          <stop offset="0%" stopColor={theme.accent} stopOpacity={0.95} />
+                          <stop offset="100%" stopColor={theme.accent} stopOpacity={0.45} />
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="4 4" stroke={theme.divider} vertical={false} />
@@ -406,27 +432,23 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
                         dataKey="freq" tickLine={false} axisLine={{ stroke: theme.divider }}
                         tick={{ fill: theme.subtext, fontSize: 10, fontWeight: 600 }}
                         tickFormatter={(f) => (f >= 1000 ? `${(f / 1000).toFixed(1)}k` : f)}
-                        minTickGap={28}
+                        minTickGap={24}
                         label={{ value: "Frequency (Hz)", position: "insideBottom", offset: -12, fill: theme.subtext, fontSize: 10.5, fontWeight: 600 }}
                       />
                       <YAxis
+                        domain={[-100, 0]}
                         tick={{ fill: theme.subtext, fontSize: 10, fontWeight: 600 }}
                         tickLine={false} axisLine={false} width={46}
                         label={{ value: "Magnitude (dB)", angle: -90, position: "insideLeft", offset: 6, fill: theme.subtext, fontSize: 10.5, fontWeight: 600 }}
                       />
                       <Tooltip
-                        cursor={{ stroke: theme.divider }}
+                        cursor={{ fill: theme.divider, opacity: 0.3 }}
                         contentStyle={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: 10, fontSize: 12 }}
                         formatter={(v) => [`${v.toFixed(1)} dB`, ""]}
                         labelFormatter={(f) => (f >= 1000 ? `${(f / 1000).toFixed(2)} kHz` : `${f} Hz`)}
                       />
-                      <Area
-                        type="monotone" dataKey="db"
-                        stroke={theme.accent} strokeWidth={1.6}
-                        fill="url(#spectrumFill)"
-                        isAnimationActive={false}
-                      />
-                    </AreaChart>
+                      <Bar dataKey="db" fill="url(#spectrumFill)" isAnimationActive={false} />
+                    </BarChart>
                   </ResponsiveContainer>
                 </div>
               )}

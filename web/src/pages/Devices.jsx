@@ -125,6 +125,19 @@ export default function Devices() {
 
   return (
     <>
+      <div className="dashboard-wave-bg" aria-hidden="true">
+        <svg viewBox="0 0 1200 500" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+          <path
+            d="M -50 260 C 100 120, 250 400, 400 250 S 700 100, 850 260 S 1150 400, 1300 250"
+            fill="none" strokeWidth="2" opacity="0.4"
+          />
+          <path
+            d="M -50 290 C 150 420, 300 130, 500 290 S 800 420, 950 290 S 1250 130, 1350 290"
+            fill="none" strokeWidth="1.4" opacity="0.26"
+          />
+        </svg>
+      </div>
+
       <header className="topbar topbar-gradient">
         <div className="topbar-titles">
           <div className="topbar-eyebrow">Manage</div>

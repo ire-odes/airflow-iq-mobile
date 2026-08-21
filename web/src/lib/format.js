@@ -62,7 +62,7 @@ export function formatIntervalLabel(rangeHours, off) {
 export const CHART_TIMEZONE = "America/Chicago";
 
 const _hourFmt = new Intl.DateTimeFormat("en-US", {
-  timeZone: CHART_TIMEZONE, hour: "2-digit", minute: "2-digit", hour12: false,
+  timeZone: CHART_TIMEZONE, hour: "numeric", minute: "2-digit", hour12: true,
 });
 const _weekdayFmt = new Intl.DateTimeFormat("en-US", {
   timeZone: CHART_TIMEZONE, weekday: "short",
@@ -72,7 +72,7 @@ const _dayFmt = new Intl.DateTimeFormat("en-US", {
 });
 const _dateTimeFmt = new Intl.DateTimeFormat("en-US", {
   timeZone: CHART_TIMEZONE, month: "short", day: "numeric",
-  hour: "2-digit", minute: "2-digit", hour12: false,
+  hour: "numeric", minute: "2-digit", hour12: true,
 });
 const _fullDayFmt = new Intl.DateTimeFormat("en-US", {
   timeZone: CHART_TIMEZONE, weekday: "long", month: "short", day: "numeric",
@@ -93,6 +93,40 @@ export const formatChartWeekday = (d) => _weekdayFmt.format(d);
 export const formatChartDay = (d) => _dayFmt.format(d);
 export const formatChartDateTime = (d) => _dateTimeFmt.format(d);
 export const formatChartFullDay = (d) => _fullDayFmt.format(d);
+
+// "2026-08-21" for the Central calendar day containing `d` -- the value
+// format <input type="date"> expects. en-CA because its short date format
+// is already ISO-ordered.
+const _isoDayFmt = new Intl.DateTimeFormat("en-CA", {
+  timeZone: CHART_TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit",
+});
+export const centralDateInputValue = (d) => _isoDayFmt.format(d);
+
+// Central's UTC offset (in ms) at a given instant -- negative here, and
+// -5h vs -6h depending on whether that date falls in CDT or CST.
+const _offsetProbeFmt = new Intl.DateTimeFormat("en-US", {
+  timeZone: CHART_TIMEZONE, hour12: false,
+  year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", second: "2-digit",
+});
+function tzOffsetMs(date) {
+  const p = _offsetProbeFmt.formatToParts(date)
+    .reduce((acc, part) => { acc[part.type] = part.value; return acc; }, {});
+  // hour can format as "24" at midnight in some engines; % 24 normalises it.
+  const asIfUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second);
+  return asIfUTC - date.getTime();
+}
+
+// Epoch ms of 00:00 Central on a "YYYY-MM-DD" date string. Iterated twice
+// because the first correction can itself land on the far side of a DST
+// boundary (where the offset differs), and the second pass settles it.
+export function centralDayStartMs(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const wantWallClock = Date.UTC(y, m - 1, d, 0, 0, 0);
+  let ts = wantWallClock;
+  for (let i = 0; i < 2; i++) ts = wantWallClock - tzOffsetMs(new Date(ts));
+  return ts;
+}
 
 // "CST" or "CDT" for the given instant -- shown next to axis labels so it's
 // explicit which timezone the chart is in rather than leaving it ambiguous.

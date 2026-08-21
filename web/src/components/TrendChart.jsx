@@ -20,7 +20,10 @@ function ChartTooltip({ active, payload, label, unit }) {
   );
 }
 
-export default function TrendChart({ data, metric, isLine, height = 300 }) {
+// onBarClick (bucketed 7D/30D views only) receives the clicked datum, so the
+// caller can drill into the individual readings behind that bucket average.
+// The 24H line view is already per-reading, so there is nothing to drill into.
+export default function TrendChart({ data, metric, isLine, height = 300, onBarClick }) {
   const { theme } = useTheme();
 
   if (!data.length) {
@@ -87,7 +90,11 @@ export default function TrendChart({ data, metric, isLine, height = 300 }) {
       ) : (
         <BarChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
           {common}
-          <Bar dataKey="value" radius={[7, 7, 0, 0]} maxBarSize={54} isAnimationActive={false}>
+          <Bar
+            dataKey="value" radius={[7, 7, 0, 0]} maxBarSize={54} isAnimationActive={false}
+            onClick={onBarClick ? (d) => onBarClick(d?.payload ?? d) : undefined}
+            cursor={onBarClick ? "pointer" : undefined}
+          >
             {data.map((d, i) => <Cell key={i} fill={d.color} />)}
           </Bar>
         </BarChart>

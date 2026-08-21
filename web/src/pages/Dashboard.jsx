@@ -10,7 +10,10 @@ import ScopePicker from "../components/ScopePicker";
 import PropertySwitcher from "../components/PropertySwitcher";
 import { supabase } from "../lib/supabase";
 import { useScope } from "../context/ScopeContext";
-import { formatIntervalLabel, getTimeOfDay, timeAgo } from "../lib/format";
+import {
+  chartTimeZoneLabel, formatChartDateTime, formatChartDay, formatChartFullDay,
+  formatChartHour, formatChartWeekday, formatIntervalLabel, getTimeOfDay, timeAgo,
+} from "../lib/format";
 import {
   ALL_METRICS, BRAND_BLUE, CARDS_STORAGE_KEY, DEFAULT_CARD_KEYS, METRICS, TIME_RANGES,
   computeHvacMetrics, getRangeStatus, getStatusColor, getStatusLabel, parseTs, toDisplay,
@@ -44,6 +47,9 @@ export default function Dashboard() {
     } catch { return DEFAULT_CARD_KEYS; }
   });
   const [ductArea] = useState(() => parseFloat(localStorage.getItem(DUCT_AREA_KEY)) || 0.1);
+
+  // Set when a 7D/30D bar is clicked -- { title, rows, loading, error }.
+  const [dayDetail, setDayDetail] = useState(null);
 
   const [editingCards, setEditingCards] = useState(false);
   const [detailMetric, setDetailMetric] = useState(null);
@@ -110,7 +116,7 @@ export default function Dashboard() {
               value,
               anomaly,
               color: anomaly ? (z > 0 ? "#ef4444" : "#45B7D1") : metric.color,
-              label: `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`,
+              label: formatChartHour(d),
             };
           })
         );
@@ -148,9 +154,13 @@ export default function Dashboard() {
             return {
               value,
               color: Math.abs(z) > 1.5 ? (z > 0 ? "#ef4444" : "#45B7D1") : metric.color,
-              label: range.hours === 168
-                ? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()]
-                : `${d.getMonth() + 1}/${d.getDate()}`,
+              label: range.hours === 168 ? formatChartWeekday(d) : formatChartDay(d),
+              // Kept so clicking a bar can pull that bucket's raw readings.
+              // The bucket boundary itself is reused as the query window
+              // rather than re-deriving a local day boundary here, so the
+              // drill-down always matches however get_chart_data bucketed.
+              bucket: r.bucket,
+              fullLabel: formatChartFullDay(d),
             };
           })
         );
@@ -161,6 +171,52 @@ export default function Dashboard() {
     }
     setLoading(false);
   }, [deviceKey, metric, rangeIndex, offset, isLine, range.bucket, range.hours, window_]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Per-day drill-down (7D / 30D bars) ─────────────────────────────────────
+  // Each bar is a bucket average; clicking one pulls the individual readings
+  // that went into it. The bucket's own timestamp is the window start rather
+  // than a separately-derived local day boundary, so this always lines up with
+  // however get_chart_data bucketed -- no second timezone derivation to drift.
+  const openDayDetail = useCallback(async (datum) => {
+    if (!datum?.bucket || !scopedDeviceIds.length) return;
+
+    const start = new Date(datum.bucket);
+    const end = new Date(start.getTime() + 24 * 3600 * 1000);
+    setDayDetail({ title: datum.fullLabel, rows: null, loading: true, error: null });
+
+    // Derived metrics (volumetricAirflow, dewPoint, ...) aren't columns on
+    // sensor_logs, so pull the raw inputs every time and compute per row when
+    // the selected metric needs it.
+    const { data, error } = await supabase
+      .from("sensor_logs")
+      .select("recorded_at, temp_c, humidity, pressure_pa, windSpeed")
+      .in("device_id", scopedDeviceIds)
+      .gte("recorded_at", start.toISOString())
+      .lt("recorded_at", end.toISOString())
+      .order("recorded_at", { ascending: true })
+      .limit(500);
+
+    if (error) {
+      setDayDetail({ title: datum.fullLabel, rows: [], loading: false, error: error.message });
+      return;
+    }
+
+    const rows = (data || [])
+      .map((r) => {
+        let value;
+        if (metric.computed) {
+          const derived = computeHvacMetrics(r, ductArea)?.[metric.key]?.value;
+          value = derived != null ? parseFloat(derived) : null;
+        } else {
+          const v = parseFloat(r[metric.key]);
+          value = isNaN(v) ? null : toDisplay(metric.key, v);
+        }
+        return { at: r.recorded_at, value };
+      })
+      .filter((r) => r.value != null && !isNaN(r.value));
+
+    setDayDetail({ title: datum.fullLabel, rows, loading: false, error: null });
+  }, [scopedDeviceIds, metric, ductArea]);
 
   // ── Averages, min/max and period-over-period change ────────────────────────
   const fetchAverages = useCallback(async () => {
@@ -400,7 +456,19 @@ export default function Dashboard() {
                   ) : loading ? (
                     <div className="skel" style={{ height: 300, borderRadius: 14 }} />
                   ) : (
-                    <TrendChart data={chartData} metric={metric} isLine={isLine} />
+                    <TrendChart
+                      data={chartData}
+                      metric={metric}
+                      isLine={isLine}
+                      onBarClick={isLine ? undefined : openDayDetail}
+                    />
+                  )}
+
+                  {chartData.length > 0 && (
+                    <p className="hint" style={{ marginTop: 6, fontSize: 11.5 }}>
+                      Times shown in {chartTimeZoneLabel()}.
+                      {!isLine && " Click a bar to see that day's readings."}
+                    </p>
                   )}
 
                   <div className="chart-footer">
@@ -508,7 +576,79 @@ export default function Dashboard() {
         averages={averages}
         ductArea={ductArea}
       />
+
+      <DayDetailModal
+        detail={dayDetail}
+        metric={metric}
+        onClose={() => setDayDetail(null)}
+      />
     </>
+  );
+}
+
+// ── Readings behind one 7D/30D bar ───────────────────────────────────────────
+// `detail` is null when closed, otherwise { title, rows, loading, error }.
+// rows is null while loading and [] when the day genuinely has no readings --
+// those are different states and shown differently, rather than collapsing
+// both into an empty list.
+function DayDetailModal({ detail, metric, onClose }) {
+  if (!detail) return null;
+
+  const rows = detail.rows;
+  const values = rows?.map((r) => r.value) ?? [];
+  const avg = values.length ? values.reduce((s, v) => s + v, 0) / values.length : null;
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={detail.title || "Readings"}
+      subtitle={`${metric.label} · times in ${chartTimeZoneLabel()}`}
+      icon={metric.icon}
+      wide
+    >
+      {detail.error && <div className="auth-error">{detail.error}</div>}
+
+      {detail.loading ? (
+        <div className="skel" style={{ height: 180, borderRadius: 12 }} />
+      ) : !rows || rows.length === 0 ? (
+        <p className="hint">No individual readings recorded for this day.</p>
+      ) : (
+        <>
+          <div className="stat-strip" style={{ marginBottom: 14 }}>
+            <div className="stat-cell">
+              <div className="stat-num">{rows.length}</div>
+              <div className="stat-lbl">Readings</div>
+            </div>
+            <div className="stat-cell">
+              <div className="stat-num">{avg.toFixed(metric.decimals >= 3 ? 3 : 1)}</div>
+              <div className="stat-lbl">Average{metric.unit}</div>
+            </div>
+            <div className="stat-cell">
+              <div className="stat-num">{Math.min(...values).toFixed(metric.decimals >= 3 ? 3 : 1)}</div>
+              <div className="stat-lbl">Min{metric.unit}</div>
+            </div>
+            <div className="stat-cell">
+              <div className="stat-num">{Math.max(...values).toFixed(metric.decimals >= 3 ? 3 : 1)}</div>
+              <div className="stat-lbl">Max{metric.unit}</div>
+            </div>
+          </div>
+
+          <div style={{ maxHeight: 380, overflowY: "auto" }}>
+            {rows.map((r, i) => (
+              <div className="list-row" key={i}>
+                <span className="grow mono" style={{ fontSize: 13 }}>
+                  {formatChartDateTime(parseTs(r.at))}
+                </span>
+                <span style={{ fontSize: 13.5, fontWeight: 700, color: metric.color }}>
+                  {r.value.toFixed(metric.decimals >= 3 ? 3 : 1)}{metric.unit}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Modal>
   );
 }
 

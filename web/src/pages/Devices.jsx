@@ -90,19 +90,30 @@ export default function Devices() {
   // cold_start instead of comparing against a stale baseline -- for after
   // moving the sensor, cleaning/replacing the mic, or installing a filter
   // known to be genuinely clean. filter_ml_readings history is untouched.
+  //
+  // Also stamps calibration_started_at, which puts the device into
+  // "sampling mode": effective_wake_seconds (a computed column read by
+  // the firmware) drops to 60s until the baseline freezes, so the 120
+  // warmup samples land in hours instead of days. See
+  // supabase/migrations/20260821120000_calibration_sampling_mode.sql.
   const recalibrateDevice = (device) => setConfirm({
     title: "Recalibrate microphone",
-    message: `Reset the acoustic baseline for "${device.name || device.device_mac}"? It will start relearning "normal" from scratch, so acoustic verdicts go quiet for a while until it warms back up.`,
+    message: `Reset the acoustic baseline for "${device.name || device.device_mac}"? It will wake every minute until it has relearned "normal" (about 2 hours of runtime), and acoustic verdicts stay quiet until then.`,
     confirmLabel: "Recalibrate",
     danger: true,
     action: async () => {
-      // .select() makes RLS-blocked deletes visible: 0 rows back = not reset
-      const { data, error } = await supabase
-        .from("device_baselines").delete().eq("device_mac", device.device_mac).select("device_mac");
-      if (error) return alert(`Failed to recalibrate: ${error.message}`);
-      if (!data || data.length === 0) {
-        return alert("This device has no existing baseline yet, or you don't have permission to reset it.");
-      }
+      // Stamped first: a device with no baseline row yet (never warmed up,
+      // or mid-warmup) still needs sampling mode, so this must not depend
+      // on the delete below finding anything.
+      const { error: stampError } = await supabase
+        .from("devices")
+        .update({ calibration_started_at: new Date().toISOString() })
+        .eq("id", device.id);
+      if (stampError) return alert(`Failed to recalibrate: ${stampError.message}`);
+
+      const { error } = await supabase
+        .from("device_baselines").delete().eq("device_mac", device.device_mac);
+      if (error) return alert(`Failed to clear the old baseline: ${error.message}`);
     },
   });
 

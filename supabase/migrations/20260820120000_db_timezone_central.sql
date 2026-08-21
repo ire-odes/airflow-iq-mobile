@@ -1,0 +1,28 @@
+-- ============================================================================
+-- AirFlow IQ -- display timestamps in Central time (America/Chicago)
+-- instead of UTC when querying via the SQL Editor / any client relying on
+-- the database's default session timezone.
+--
+-- This does NOT change how anything is stored: timestamptz columns
+-- (audio_logs.updated_at, filter_ml_readings.recorded_at,
+-- device_baselines.last_processed_at, sensor_logs.recorded_at, etc.)
+-- always hold an absolute instant, normalized to UTC internally,
+-- regardless of this setting. ALTER DATABASE ... SET timezone only
+-- changes how that instant is *formatted* on output. App/service code
+-- that already parses the ISO offset in each value (dateutil.isoparse
+-- in ML/service/*.py, JS Date on the web side) is unaffected either
+-- way -- this is purely for readability when eyeballing rows in the
+-- Supabase Dashboard.
+--
+-- America/Chicago (an IANA zone, not a fixed "CDT"/-05:00 offset) is
+-- used deliberately so Postgres automatically switches between CDT and
+-- CST on the correct calendar dates -- a hardcoded offset would
+-- silently read wrong for half the year.
+--
+-- Run this once in the Supabase Dashboard -> SQL Editor. Takes effect
+-- for new sessions/connections after it runs; if it errors saying the
+-- database name doesn't exist, run `select current_database();` first
+-- and substitute that name below ("postgres" is the Supabase default).
+-- ============================================================================
+
+alter database postgres set timezone to 'America/Chicago';

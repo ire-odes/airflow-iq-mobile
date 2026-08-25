@@ -10,10 +10,17 @@ export function AuthProvider({ children }) {
 
   const loadTechnicianAssignments = async (email) => {
     if (!email) { setTechnicianAssignments([]); return; }
+    // Lowercased to match how assignments are stored (both write paths --
+    // Account.jsx's inviteTechnician and Properties.jsx's addTechnician --
+    // normalise before inserting) and how the RLS policies compare them
+    // (see supabase/migrations/20260828010000_technician_email_case_
+    // insensitive.sql). Without this, a technician whose auth email carries
+    // any uppercase would be granted access by RLS but read back zero
+    // assignments here, so the app wouldn't know they're a technician.
     const { data } = await supabase
       .from("technician_assignments")
       .select("id, landlord_id, technician_email")
-      .eq("technician_email", email);
+      .eq("technician_email", email.toLowerCase());
     setTechnicianAssignments(data || []);
   };
 

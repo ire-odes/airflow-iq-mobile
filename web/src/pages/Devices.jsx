@@ -93,12 +93,20 @@ export default function Devices() {
   //
   // Also stamps calibration_started_at, which puts the device into
   // "sampling mode": effective_wake_seconds (a computed column read by
-  // the firmware) drops to 60s until the baseline freezes, so the 120
-  // warmup samples land in hours instead of days. See
+  // the firmware) drops to 60s while the baseline builds. See
   // supabase/migrations/20260821120000_calibration_sampling_mode.sql.
+  //
+  // Note this no longer shortens warmup to ~2h, as it originally did. A
+  // baseline built from 120 samples inside a 2-hour window encodes one
+  // narrow set of operating conditions, then reads ordinary overnight
+  // variation as drift -- three devices flipped to "dirty" on filters
+  // nobody had touched. The baseline now also requires its samples to
+  // span ~20h before it can freeze (MIN_BASELINE_SPAN_SECONDS in
+  // ML/service/poll_and_infer.py), so fast sampling makes the baseline
+  // denser rather than ready sooner.
   const recalibrateDevice = (device) => setConfirm({
     title: "Recalibrate microphone",
-    message: `Reset the acoustic baseline for "${device.name || device.device_mac}"? It will wake every minute until it has relearned "normal" (about 2 hours of runtime), and acoustic verdicts stay quiet until then.`,
+    message: `Reset the acoustic baseline for "${device.name || device.device_mac}"? It samples every minute at first, but needs to listen across a full day and night before it can judge anything — acoustic verdicts stay quiet for about 20 hours. Only do this right after fitting a filter you know is clean.`,
     confirmLabel: "Recalibrate",
     danger: true,
     action: async () => {
@@ -111,9 +119,34 @@ export default function Devices() {
         .eq("id", device.id);
       if (stampError) return alert(`Failed to recalibrate: ${stampError.message}`);
 
-      const { error } = await supabase
-        .from("device_baselines").delete().eq("device_mac", device.device_mac);
+      // .select() so an RLS-blocked or no-op delete is visible: an error-free
+      // delete that matched 0 rows is otherwise indistinguishable from
+      // success. Verified again below because the delete succeeding is not
+      // the same as the baseline staying gone -- see the note there.
+      const { data, error } = await supabase
+        .from("device_baselines").delete().eq("device_mac", device.device_mac).select("device_mac");
       if (error) return alert(`Failed to clear the old baseline: ${error.message}`);
+
+      // The ML poller (ML/service/poll_and_infer.py) reads a device's
+      // baseline at the start of a cycle and writes it back at the end. A
+      // delete landing between those two points gets undone when the poller
+      // upserts the state it already had in memory, which silently restores
+      // the exact baseline this action was meant to clear. The poller has a
+      // guard for this, but re-reading here catches the case where it's
+      // running an older build.
+      const { data: still } = await supabase
+        .from("device_baselines").select("device_mac").eq("device_mac", device.device_mac);
+      if (still && still.length > 0) {
+        return alert(
+          "The baseline was cleared but immediately came back, which means the " +
+          "ML poller rewrote it. Stop the poller, then recalibrate this device again."
+        );
+      }
+      if (!data || data.length === 0) {
+        // Not an error: a device that never warmed up has no row to clear.
+        // calibration_started_at is already stamped above either way, so
+        // sampling mode still applies.
+      }
     },
   });
 

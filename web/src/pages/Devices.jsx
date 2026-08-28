@@ -67,9 +67,42 @@ export default function Devices() {
   // ── Mutations ──────────────────────────────────────────────────────────────
   const saveDevice = async (form) => {
     setBusy(true);
-    const { error } = await supabase.from("devices").update(form).eq("id", editingDevice.id);
+
+    // Pairing lives on both rows (devices.paired_device_id is a plain
+    // self-reference, not a join table), so writing only this device's side
+    // would leave a half-pair: the partner wouldn't know it was paired, and
+    // lora_slot_seconds resolves across the pair from whichever row is being
+    // read. Both sides are written here, and the old partner is released
+    // first so a device can be re-paired without stranding its previous one.
+    const { pairedWith, ...deviceFields } = form;
+    const previousPartner = editingDevice.paired_device_id;
+
+    const { error } = await supabase
+      .from("devices").update(deviceFields).eq("id", editingDevice.id);
+    if (error) { setBusy(false); return alert(`Failed to update device: ${error.message}`); }
+
+    if (pairedWith !== undefined && pairedWith !== previousPartner) {
+      if (previousPartner) {
+        await supabase.from("devices")
+          .update({ paired_device_id: null }).eq("id", previousPartner);
+      }
+      const { error: pairError } = await supabase.from("devices")
+        .update({ paired_device_id: pairedWith || null }).eq("id", editingDevice.id);
+      if (pairError) { setBusy(false); return alert(`Failed to pair: ${pairError.message}`); }
+
+      if (pairedWith) {
+        // The partner points back, and inherits the opposite role so a pair
+        // can't end up with two blowers -- which would silently give both
+        // units the same transmit offset and collide them at the gateway.
+        const opposite = deviceFields.duct_role === "blower" ? "filter" : "blower";
+        const { error: backError } = await supabase.from("devices")
+          .update({ paired_device_id: editingDevice.id, duct_role: opposite })
+          .eq("id", pairedWith);
+        if (backError) { setBusy(false); return alert(`Failed to pair partner: ${backError.message}`); }
+      }
+    }
+
     setBusy(false);
-    if (error) return alert(`Failed to update device: ${error.message}`);
     setEditingDevice(null);
     refresh();
   };
@@ -299,6 +332,7 @@ export default function Devices() {
       <EditDeviceModal
         device={editingDevice}
         properties={properties}
+        allDevices={devices}
         onClose={() => setEditingDevice(null)}
         onSave={saveDevice}
         busy={busy}
@@ -586,7 +620,7 @@ const WAKE_PRESETS = [
 ];
 const INTERVAL_PRESETS = [7, 14, 21, 30];
 
-function EditDeviceModal({ device, properties, onClose, onSave, busy, schemaReady }) {
+function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy, schemaReady }) {
   const [form, setForm] = useState(null);
   const [error, setError] = useState(null);
 
@@ -602,6 +636,8 @@ function EditDeviceModal({ device, properties, onClose, onSave, busy, schemaRead
       tenant_email: device.tenant_email || "",
       tenant_phone: device.tenant_phone || "",
       tenantEnabled: !!(device.tenant_email || device.tenant_phone),
+      duct_role: device.duct_role || "",
+      pairedWith: device.paired_device_id || "",
     });
   }, [device]);
 
@@ -639,6 +675,11 @@ function EditDeviceModal({ device, properties, onClose, onSave, busy, schemaRead
           wake_interval_seconds: wake,
           tenant_email: form.tenantEnabled ? form.tenant_email.trim().toLowerCase() : null,
           tenant_phone: form.tenantEnabled ? form.tenant_phone.trim() : null,
+          // Only meaningful for LoRaWAN units; null on everything else so a
+          // WiFi device can't accidentally carry a duct role.
+          ...(device.is_lorawan
+            ? { duct_role: form.duct_role || null, pairedWith: form.pairedWith || null }
+            : {}),
         }
       : { name: form.name.trim(), hvac_location: form.hvac_location.trim() };
 
@@ -696,6 +737,53 @@ function EditDeviceModal({ device, properties, onClose, onSave, busy, schemaRead
                 : "Run the properties migration to enable this."}
             </p>
           </div>
+
+          {device.is_lorawan && (
+            <div className="field">
+              <label className="field-label">DUCT PAIRING (LORAWAN)</label>
+              <p className="hint">
+                LoRaWAN nodes work in pairs, one either side of the filter. Pairing them
+                makes both sample the same moment, so the difference between them means
+                something — and lets the dashboard chart them together.
+              </p>
+
+              <div className="row gap-sm" style={{ marginTop: 8 }}>
+                {["blower", "filter"].map((role) => (
+                  <button
+                    key={role}
+                    className={`pill${form.duct_role === role ? " active" : ""}`}
+                    onClick={() => set({ duct_role: form.duct_role === role ? "" : role })}
+                  >
+                    {role === "blower" ? "Blower side" : "Filter side"}
+                  </button>
+                ))}
+              </div>
+
+              <select
+                className="input"
+                style={{ marginTop: 8 }}
+                value={form.pairedWith}
+                onChange={(e) => set({ pairedWith: e.target.value })}
+              >
+                <option value="">Not paired</option>
+                {(allDevices || [])
+                  /* Only other LoRaWAN units, and only ones that are free or
+                     already paired to this device -- offering a node that is
+                     half of another pair would silently break that pair. */
+                  .filter((d) => d.is_lorawan && d.id !== device.id
+                    && (!d.paired_device_id || d.paired_device_id === device.id))
+                  .map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name || d.device_mac}{d.duct_role ? ` — ${d.duct_role} side` : ""}
+                    </option>
+                  ))}
+              </select>
+              <p className="hint" style={{ marginTop: 6 }}>
+                The partner is given the opposite role automatically, and both units move to
+                the shorter of their two wake intervals so they share sampling boundaries.
+              </p>
+            </div>
+          )}
 
           <div className="field">
             <label className="field-label">FILTER REPLACEMENT INTERVAL</label>

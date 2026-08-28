@@ -24,7 +24,7 @@ const DUCT_AREA_KEY = "duct_area";
 const DAY_MS = 24 * 3600 * 1000;
 
 export default function Dashboard() {
-  const { scopedDeviceIds, devicesInScope, selectedDevice, loading: scopeLoading } = useScope();
+  const { scopedDeviceIds, devicesInScope, devices, selectedDevice, loading: scopeLoading } = useScope();
 
   const [rangeIndex, setRangeIndex] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -51,6 +51,17 @@ export default function Dashboard() {
 
   const [datePickerOpen, setDatePickerOpen] = useState(false);
 
+  // Paired LoRaWAN nodes sit either side of the filter and sample the same
+  // moment (see supabase/migrations/20260831000000_lora_device_pairing.sql),
+  // so their series are directly comparable -- a widening gap is restriction
+  // across the filter rather than something ambient affecting both.
+  const [comparePair, setComparePair] = useState(false);
+  const pairPartner = useMemo(() => {
+    const pid = selectedDevice?.paired_device_id;
+    if (!pid) return null;
+    return (devices || []).find((d) => d.id === pid) || null;
+  }, [selectedDevice, devices]);
+
   const [editingCards, setEditingCards] = useState(false);
   const [detailMetric, setDetailMetric] = useState(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -58,6 +69,8 @@ export default function Dashboard() {
   const range = TIME_RANGES[rangeIndex];
   const isLine = range.hours === 24;
   const deviceKey = scopedDeviceIds.join(",");
+
+  useEffect(() => { if (!pairPartner) setComparePair(false); }, [pairPartner]);
 
   const window_ = useCallback(() => {
     const rangeMs = range.hours * 3600000;
@@ -75,6 +88,7 @@ export default function Dashboard() {
 
     setLoading(true); setError(null);
     const { start, end } = window_();
+    let points = [];
 
     try {
       if (isLine) {
@@ -106,7 +120,7 @@ export default function Dashboard() {
 
         // Thin dense series so the chart stays readable.
         const step = Math.max(1, Math.floor(data.length / 160));
-        setChartData(
+        points = (
           data.filter((_, i) => i % step === 0).map((row) => {
             const value = toDisplay(metric.key, parseFloat(row[metric.key]) || 0) ?? 0;
             const z = sd > 0 ? (value - mean) / sd : 0;
@@ -146,7 +160,7 @@ export default function Dashboard() {
           lastTs: data[data.length - 1]?.bucket || null,
         });
 
-        setChartData(
+        points = (
           data.map((r) => {
             const value = toDisplay(metric.key, r.avg_val) ?? 0;
             const z = sd > 0 ? (value - mean) / sd : 0;
@@ -164,12 +178,53 @@ export default function Dashboard() {
           })
         );
       }
+
+      // Overlay the paired node's series. Fetched with the same window and
+      // shape, then merged on the axis label -- safe here precisely because
+      // the two nodes are slot-synchronised, so their readings fall on the
+      // same boundaries and therefore produce the same labels. Missing points
+      // stay undefined rather than 0, so a gap in one unit reads as a gap
+      // instead of a fabricated dip to zero.
+      if (comparePair && pairPartner && points.length) {
+        const partnerPoints = isLine
+          ? await (async () => {
+              const { data: pd } = await supabase
+                .from("sensor_logs")
+                .select(`recorded_at, ${metric.key}`)
+                .eq("device_id", pairPartner.id)
+                .gte("recorded_at", start).lte("recorded_at", end)
+                .order("recorded_at", { ascending: true }).limit(500);
+              return (pd || []).map((row) => ({
+                label: formatChartHour(parseTs(row.recorded_at)),
+                value: toDisplay(metric.key, parseFloat(row[metric.key])),
+              }));
+            })()
+          : await (async () => {
+              const { data: pd } = await supabase.rpc("get_chart_data", {
+                p_device_ids: [pairPartner.id],
+                p_metric: metric.key,
+                p_start: start, p_end: end, p_bucket: range.bucket,
+              });
+              return (pd || []).map((r) => ({
+                label: range.hours === 168
+                  ? formatChartWeekday(new Date(r.bucket))
+                  : formatChartDay(new Date(r.bucket)),
+                value: toDisplay(metric.key, r.avg_val),
+              }));
+            })();
+
+        const byLabel = new Map(partnerPoints.map((p) => [p.label, p.value]));
+        points = points.map((p) => ({ ...p, compareValue: byLabel.get(p.label) }));
+      }
+
+      setChartData(points);
       setLastUpdated(new Date().toISOString());
     } catch (e) {
       setError(e.message || "Failed to load chart data");
     }
     setLoading(false);
-  }, [deviceKey, metric, rangeIndex, offset, isLine, range.bucket, range.hours, window_]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [deviceKey, metric, rangeIndex, offset, isLine, range.bucket, range.hours, window_,
+      comparePair, pairPartner]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Jump to one calendar day's 24H view ────────────────────────────────────
   // Used by both the 7D/30D bar click and the date picker. The 24H view is a
@@ -365,6 +420,17 @@ export default function Dashboard() {
                 ))}
               </div>
 
+              {pairPartner && (
+                <button
+                  className={`pill${comparePair ? " active" : ""}`}
+                  onClick={() => setComparePair((v) => !v)}
+                  title={`Overlay ${pairPartner.name || pairPartner.device_mac}`}
+                >
+                  <Icon name="device" size={13} />{" "}
+                  {comparePair ? "Hide" : "Compare"} {pairPartner.duct_role === "blower" ? "blower" : "filter"} unit
+                </button>
+              )}
+
               <div className="row gap-sm" style={{ marginLeft: "auto" }}>
                 <button className="btn btn-icon" onClick={() => setOffset((o) => o + 1)} title="Previous period">
                   <Icon name="chevron-left" size={16} />
@@ -465,6 +531,12 @@ export default function Dashboard() {
                       metric={metric}
                       isLine={isLine}
                       onBarClick={isLine ? undefined : (d) => d?.bucket && jumpToDay(new Date(d.bucket).getTime())}
+                      compareLabel={comparePair && pairPartner
+                        ? `${pairPartner.name || pairPartner.device_mac}${pairPartner.duct_role ? ` (${pairPartner.duct_role})` : ""}`
+                        : undefined}
+                      primaryLabel={selectedDevice
+                        ? `${selectedDevice.name || selectedDevice.device_mac}${selectedDevice.duct_role ? ` (${selectedDevice.duct_role})` : ""}`
+                        : undefined}
                     />
                   )}
 

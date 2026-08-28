@@ -42,15 +42,34 @@ async function getLatestClassification(deviceMac) {
 // fabricate it" rule as everywhere else in this file. Index i here lines
 // up with index i of computeSpectrum()'s output; both sides use the same
 // bin scheme (see spectrum_viz.py's module docstring for the Python side).
-export async function getBaselineSpectrum(deviceMac) {
+// Also returns the baseline's own warmup state, because the latest reading's
+// decision alone can't answer "is this device still calibrating?".
+//
+// FilterHealthMonitor consumes a reading as a warmup sample and only then
+// checks whether the baseline can freeze, so the reading that triggers the
+// freeze is itself still recorded as "calibrating" -- the first real verdict
+// lands on the reading after it. Judging by the last decision therefore shows
+// "calibrating" for a device whose baseline is already warm, and shows it
+// indefinitely if that device stops reporting at that moment.
+//
+// Returns null only when the device has no baseline row at all. `spectrum` is
+// separately null until enough readings have been averaged, so callers must
+// not treat a missing spectrum as "no baseline".
+export async function getBaselineStatus(deviceMac) {
   if (!deviceMac) return null;
   const { data, error } = await supabase
     .from("device_baselines")
-    .select("baseline_spectrum_db, spectrum_n")
+    .select("baseline_spectrum_db, spectrum_n, state, n_warmup_samples")
     .eq("device_mac", deviceMac)
     .maybeSingle();
-  if (error || !data || !data.baseline_spectrum_db) return null;
-  return { db: data.baseline_spectrum_db, n: data.spectrum_n };
+  if (error || !data) return null;
+  return {
+    state: data.state || "cold_start",
+    samples: data.n_warmup_samples ?? 0,
+    spectrum: data.baseline_spectrum_db
+      ? { db: data.baseline_spectrum_db, n: data.spectrum_n }
+      : null,
+  };
 }
 
 // Returns null if there's no recording yet, otherwise:

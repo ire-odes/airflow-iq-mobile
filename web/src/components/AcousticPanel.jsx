@@ -3,7 +3,7 @@ import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, 
 import Icon from "./Icon";
 import { useTheme } from "../context/ThemeContext";
 import { formatSeconds, timeAgo, formatTimestamp } from "../lib/format";
-import { getLatestRecording, getBaselineSpectrum, computePeaks, computeSpectrum, normalizeMfcc } from "../lib/audioRecordings";
+import { getLatestRecording, getBaselineStatus, computePeaks, computeSpectrum, normalizeMfcc } from "../lib/audioRecordings";
 
 // ============================================================================
 // Acoustic Data — real recordings from audio_logs / hvac-recordings storage,
@@ -61,6 +61,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
   const [peaks, setPeaks] = useState([]);
   const [spectrum, setSpectrum] = useState([]);
   const [baselineSpectrum, setBaselineSpectrum] = useState(null); // null = none accumulated yet
+  const [baselineState, setBaselineState] = useState(null);       // "cold_start" | "warming" | "warm"
   const [duration, setDuration] = useState(0);
   const [audioLoading, setAudioLoading] = useState(false);
   const [audioError, setAudioError] = useState(null);
@@ -93,14 +94,19 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
     setRecording(undefined);
     setLoadError(null);
     setBaselineSpectrum(null);
+    setBaselineState(null);
     (async () => {
       if (!deviceMac) { if (!cancelled) setRecording(null); return; }
       try {
         const [rec, baseline] = await Promise.all([
           getLatestRecording(deviceMac),
-          getBaselineSpectrum(deviceMac),
+          getBaselineStatus(deviceMac),
         ]);
-        if (!cancelled) { setRecording(rec); setBaselineSpectrum(baseline); }
+        if (!cancelled) {
+          setRecording(rec);
+          setBaselineSpectrum(baseline?.spectrum ?? null);
+          setBaselineState(baseline?.state ?? null);
+        }
       } catch (e) {
         if (!cancelled) { setLoadError(e.message || "Couldn't load recording"); setRecording(null); }
       }
@@ -250,7 +256,18 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
   // the classifier alone is unreliable on a brand-new environment (a real
   // device called 100% of a real house's clean readings "dirty"), so its
   // raw opinion is never surfaced as a verdict until drift takes over.
-  const isCalibrating = classification?.decision === "calibrating";
+  //
+  // Gated on the baseline's own state, not the last decision alone. The
+  // reading that completes a warmup is itself still logged as "calibrating"
+  // -- FilterHealthMonitor consumes it as the final warmup sample and only
+  // then freezes -- so the decision lags the baseline by one reading, and
+  // lags indefinitely if the device goes quiet at that moment. Once
+  // device_baselines says "warm" the calibration is genuinely done and
+  // we're only waiting for the next reading to be scored, which is a
+  // different thing to tell the user.
+  const baselineWarm = baselineState === "warm";
+  const isCalibrating = classification?.decision === "calibrating" && !baselineWarm;
+  const awaitingFirstVerdict = classification?.decision === "calibrating" && baselineWarm;
   const isDirty = classification?.decision === "dirty";
   // classifier_confidence is the classifier's own P(dirty) specifically --
   // labeled as such rather than implied to be "confidence in this verdict",
@@ -278,6 +295,10 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
             <span className="badge" style={{ background: "#6366f11f", color: "#6366f1" }}>
               <Icon name="pulse" size={11} /> Calibrating…
             </span>
+          ) : awaitingFirstVerdict ? (
+            <span className="badge" style={{ background: "#6366f11f", color: "#6366f1" }}>
+              <Icon name="success" size={11} /> Calibrated
+            </span>
           ) : classification ? (
             <span
               className="badge"
@@ -302,9 +323,19 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
         <div className="banner" style={{ background: "var(--inputBg)", borderColor: "var(--border)" }}>
           <Icon name="pulse" size={16} style={{ color: "var(--subtext)" }} />
           <span className="grow">
-            Learning this device's normal acoustic signature — verdicts appear once it's
-            collected enough readings. This can take a while after a device is claimed, moved,
-            or recalibrated.
+            Learning this device's normal acoustic signature — verdicts appear once it has
+            listened across a full day and night, so it can tell a dirty filter apart from
+            ordinary day-to-night variation. Expect about 20 hours after a device is claimed,
+            moved, or recalibrated.
+          </span>
+        </div>
+      )}
+
+      {awaitingFirstVerdict && (
+        <div className="banner" style={{ background: "var(--inputBg)", borderColor: "var(--border)" }}>
+          <Icon name="success" size={16} style={{ color: "var(--subtext)" }} />
+          <span className="grow">
+            Calibration complete — the first verdict lands on this device's next reading.
           </span>
         </div>
       )}

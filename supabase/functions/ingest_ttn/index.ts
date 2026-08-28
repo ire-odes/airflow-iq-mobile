@@ -39,14 +39,29 @@ async function queueSlotDownlink(devEui: string, slotSeconds: number) {
 
   if (!apiKey || !appId) return; // not configured -- nothing to do
 
-  // 4-byte big-endian seconds. Fixed width keeps the device-side decode a
-  // couple of shifts with no length handling, and 32 bits is far more than
-  // any sane slot needs.
+  // 9 bytes: version, slot seconds, and the current Unix time.
+  //
+  // The time is what lets the node align to an absolute boundary. It could
+  // come from the LoRaWAN DeviceTimeReq MAC command instead, but that
+  // depends on RadioLib's MAC-command surface (which moves between
+  // versions) and on the network server answering it. Sending it at the
+  // application layer works on any stack that can receive a downlink.
+  //
+  // It arrives one RX window late -- roughly 1-5s after the uplink -- so
+  // the node's clock is stale by about that much. Irrelevant at slot sizes
+  // of minutes: every node is off by a similar small amount, and they
+  // still land on the same boundary within a few seconds of each other.
+  const unixNow = Math.floor(Date.now() / 1000);
   const payload = new Uint8Array([
+    0x01, // payload version, so the node can reject formats it can't parse
     (slotSeconds >>> 24) & 0xff,
     (slotSeconds >>> 16) & 0xff,
     (slotSeconds >>> 8) & 0xff,
     slotSeconds & 0xff,
+    (unixNow >>> 24) & 0xff,
+    (unixNow >>> 16) & 0xff,
+    (unixNow >>> 8) & 0xff,
+    unixNow & 0xff,
   ]);
   const frmPayload = btoa(String.fromCharCode(...payload));
 
@@ -111,7 +126,7 @@ Deno.serve(async (req: Request) => {
 
   const { data: device, error: deviceError } = await supabase
     .from("devices")
-    .select("id, sample_slot_seconds")
+    .select("id, sample_slot_seconds, sample_slot_synced_at")
     .eq("device_mac", mac)
     .single();
 
@@ -164,11 +179,34 @@ Deno.serve(async (req: Request) => {
   // MAC in the payload, so take it from end_device_ids rather than reusing
   // `mac`. Skipped entirely when no slot is configured, leaving the device
   // on its compiled-in default.
+  //
+  // Rationed rather than sent every uplink: TTN's fair use policy allows
+  // roughly 10 downlinks per device per day, and at a 15-minute slot a
+  // node uplinks ~96 times daily. Resyncing every RESYNC_HOURS keeps this
+  // to ~2/day. That's ample -- the ESP32 RTC drifts on the order of
+  // seconds per day, which is nothing against a slot measured in minutes.
+  const RESYNC_HOURS = 12;
   const endDeviceIds = body?.end_device_ids as Record<string, unknown> | undefined;
   const ttnDeviceId = endDeviceIds?.device_id as string | undefined;
   const slot = device.sample_slot_seconds as number | null;
+
   if (ttnDeviceId && typeof slot === "number" && slot > 0) {
-    await queueSlotDownlink(ttnDeviceId, slot);
+    const syncedAt = device.sample_slot_synced_at as string | null;
+    const ageHours = syncedAt
+      ? (Date.now() - new Date(syncedAt).getTime()) / 3_600_000
+      : Infinity;
+
+    if (ageHours >= RESYNC_HOURS) {
+      await queueSlotDownlink(ttnDeviceId, slot);
+      // Stamped even if the queue call failed: retrying on the very next
+      // uplink would defeat the rationing this exists to enforce, and a
+      // missed sync just means the node keeps its current slot for another
+      // RESYNC_HOURS, which is harmless.
+      await supabase
+        .from("devices")
+        .update({ sample_slot_synced_at: new Date().toISOString() })
+        .eq("id", device.id);
+    }
   }
 
   return new Response(JSON.stringify({ ok: true }), {

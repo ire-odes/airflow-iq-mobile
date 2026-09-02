@@ -8,13 +8,14 @@ import {
   TrendingDown, Calendar, ArrowLeftRight, Radio, Battery, Wrench, Home,
   Bell, Search, Info, Volume2, BarChart3, Download,
   Truck, Package, ShoppingCart, Store, Receipt, CreditCard, Minus, Crown,
-  ExternalLink, Phone,
+  ExternalLink, Phone, Link2,
 } from "lucide-react";
 
 // Maps the string icon names used in metrics.js / acoustic.js to components.
 const ICONS = {
   thermometer: Thermometer, droplet: Droplet, gauge: Gauge, wind: Wind,
   "move-right": MoveRight, layers: Layers, "cloud-drizzle": CloudDrizzle,
+  link: Link2,
   smile: Smile, cloud: Cloud, "cloud-sun": CloudSun, zap: Zap, sun: Sun,
   dashboard: LayoutDashboard, device: HardDrive, settings: Settings,
   building: Building2, location: MapPin, barcode: Barcode, clock: Clock,

@@ -31,13 +31,13 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
  * and returns instead of throwing. Silently disabled when the TTN env vars
  * aren't set, so existing deployments keep working untouched.
  */
-async function queueSlotDownlink(devEui: string, slotSeconds: number, txOffsetSeconds: number) {
+async function queueSlotDownlink(devEui: string, slotSeconds: number, txOffsetSeconds: number): Promise<string | null> {
   const apiKey = Deno.env.get("TTN_API_KEY");
   const appId = Deno.env.get("TTN_APP_ID");
   const region = Deno.env.get("TTN_REGION") ?? "nam1";
   const fPort = Number(Deno.env.get("TTN_CONFIG_FPORT") ?? "10");
 
-  if (!apiKey || !appId) return; // not configured -- nothing to do
+  if (!apiKey || !appId) return "TTN_API_KEY/TTN_APP_ID not set";
 
   // 10 bytes: version, slot seconds, current Unix time, transmit offset.
   //
@@ -89,10 +89,14 @@ async function queueSlotDownlink(devEui: string, slotSeconds: number, txOffsetSe
       }),
     });
     if (!res.ok) {
-      console.error("TTN downlink queue failed:", res.status, await res.text());
+      const body = (await res.text()).slice(0, 300);
+      console.error("TTN downlink queue failed:", res.status, body);
+      return `HTTP ${res.status}: ${body}`;
     }
+    return null;   // queued successfully
   } catch (e) {
     console.error("TTN downlink queue error:", e);
+    return `fetch failed: ${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
@@ -191,6 +195,30 @@ Deno.serve(async (req: Request) => {
   // to ~2/day. That's ample -- the ESP32 RTC drifts on the order of
   // seconds per day, which is nothing against a slot measured in minutes.
   const RESYNC_HOURS = 12;
+
+  // A node that rejoins gets a NEW session, and the network drops any
+  // downlink still queued under the old session keys -- so a config downlink
+  // queued just before a rejoin is silently lost. Since the timestamp below
+  // is stamped on queueing rather than on delivery, that node would then wait
+  // the full RESYNC_HOURS with no slot and no clock, sleeping unaligned the
+  // whole time. Observed on P9: queued 12:08, node power-cycled to Boot #1,
+  // rejoined, and reported "No time sync yet".
+  //
+  // The boot counter is the tell. It lives in RTC memory, which survives deep
+  // sleep but not power loss, so a value at or below the last one we saw means
+  // the node restarted and lost whatever config it had. Re-sync immediately in
+  // that case rather than waiting out the timer.
+  const prevBoot = await (async () => {
+    const { data } = await supabase
+      .from("sensor_logs").select("boot")
+      .eq("device_id", device.id)
+      .order("recorded_at", { ascending: false })
+      .limit(1).maybeSingle();
+    return typeof data?.boot === "number" ? data.boot : null;
+  })();
+  const thisBoot = typeof decoded.boot === "number" ? decoded.boot : null;
+  const nodeRestarted = prevBoot !== null && thisBoot !== null && thisBoot <= prevBoot;
+
   const endDeviceIds = body?.end_device_ids as Record<string, unknown> | undefined;
   const ttnDeviceId = endDeviceIds?.device_id as string | undefined;
   // lora_slot_seconds resolves the shared value across a blower/filter pair
@@ -206,15 +234,19 @@ Deno.serve(async (req: Request) => {
       ? (Date.now() - new Date(syncedAt).getTime()) / 3_600_000
       : Infinity;
 
-    if (ageHours >= RESYNC_HOURS) {
-      await queueSlotDownlink(ttnDeviceId, slot, txOffset);
-      // Stamped even if the queue call failed: retrying on the very next
-      // uplink would defeat the rationing this exists to enforce, and a
-      // missed sync just means the node keeps its current slot for another
-      // RESYNC_HOURS, which is harmless.
+    if (ageHours >= RESYNC_HOURS || nodeRestarted) {
+      const failure = await queueSlotDownlink(ttnDeviceId, slot, txOffset);
+      // Stamp ONLY on success. Stamping regardless (what this did before)
+      // made a failed POST indistinguishable from a delivered downlink:
+      // devices showed "synced" while TTN had never been asked, and the
+      // rationing then blocked retries for RESYNC_HOURS. Recording the
+      // reason means the next failure is visible in one query rather than
+      // inferred from nodes silently ignoring their slot.
       await supabase
         .from("devices")
-        .update({ sample_slot_synced_at: new Date().toISOString() })
+        .update(failure
+          ? { sample_slot_sync_error: failure }
+          : { sample_slot_synced_at: new Date().toISOString(), sample_slot_sync_error: null })
         .eq("id", device.id);
     }
   }

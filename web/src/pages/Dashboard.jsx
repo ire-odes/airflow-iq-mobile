@@ -92,13 +92,21 @@ export default function Dashboard() {
 
     try {
       if (isLine) {
-        const { data, error } = await supabase
+        // Ordered DESCENDING then reversed, so the 500-row cap keeps the
+        // NEWEST readings rather than the oldest. Ascending + limit returns
+        // the first 500 rows in the window, which for a device uplinking
+        // more than 500 times in the range meant the chart showed only the
+        // beginning of the period and "Last reading" reported the 500th
+        // OLDEST row as the latest -- P9 read "21 hours ago" while it was
+        // uplinking every few minutes, because row 500 of 1164 landed there.
+        const { data: newestFirst, error } = await supabase
           .from("sensor_logs")
           .select(`recorded_at, ${metric.key}`)
           .in("device_id", scopedDeviceIds)
           .gte("recorded_at", start).lte("recorded_at", end)
-          .order("recorded_at", { ascending: true })
+          .order("recorded_at", { ascending: false })
           .limit(500);
+        const data = (newestFirst || []).slice().reverse();
 
         if (error) throw error;
         if (!data?.length) {
@@ -193,8 +201,8 @@ export default function Dashboard() {
                 .select(`recorded_at, ${metric.key}`)
                 .eq("device_id", pairPartner.id)
                 .gte("recorded_at", start).lte("recorded_at", end)
-                .order("recorded_at", { ascending: true }).limit(500);
-              return (pd || []).map((row) => ({
+                .order("recorded_at", { ascending: false }).limit(500);
+              return (pd || []).slice().reverse().map((row) => ({
                 label: formatChartHour(parseTs(row.recorded_at)),
                 value: toDisplay(metric.key, parseFloat(row[metric.key])),
               }));
@@ -227,19 +235,30 @@ export default function Dashboard() {
       comparePair, pairPartner]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Jump to one calendar day's 24H view ────────────────────────────────────
-  // Used by both the 7D/30D bar click and the date picker. The 24H view is a
-  // rolling window ending at `end` (see window_ above), so landing on a
-  // specific calendar day means placing `end` at that day's last instant.
-  // 1ms before the next Central midnight, not midnight itself: exactly
-  // midnight would make formatIntervalLabel name the *following* day.
+  // Used by both the 7D/30D bar click and the date picker.
+  //
+  // Offsets are relative to "now", and window_() / formatIntervalLabel() both
+  // re-read Date.now() on EVERY render -- so an offset computed here decays as
+  // real time passes:
+  //
+  //     end = Date.now()_render - offset * DAY_MS
+  //         = anchor + (time elapsed since the click)
+  //
+  // This previously anchored `end` at dayEnd - 1ms (23:59:59.999 of the
+  // clicked day). Any elapsed time at all -- including the few milliseconds
+  // before React re-rendered -- pushed `end` past midnight, and the view
+  // showed the FOLLOWING day. Whether it misfired depended purely on render
+  // timing, which is why it only happened sometimes.
+  //
+  // A whole number of days back puts `end` at the same clock time N days ago:
+  // squarely inside the clicked day with ~12h of slack either side, stable
+  // until the viewer's own clock crosses midnight. Math.round absorbs DST
+  // days, where the true gap is 23h or 25h rather than DAY_MS.
   const jumpToDay = useCallback((dayStartMs) => {
-    const dayEnd = dayStartMs + DAY_MS;
-    // Fractional offsets are fine here -- window_ and formatIntervalLabel both
-    // just multiply it out. Stepping with the arrows afterwards then moves in
-    // whole days from this day boundary, staying calendar-aligned.
-    const off = (Date.now() - (dayEnd - 1)) / DAY_MS;
+    const todayStartMs = centralDayStartMs(centralDateInputValue(new Date()));
+    const daysBack = Math.round((todayStartMs - dayStartMs) / DAY_MS);
     setRangeIndex(TIME_RANGES.findIndex((t) => t.hours === 24));
-    setOffset(Math.max(0, off));   // a day ending in the future clamps to "now"
+    setOffset(Math.max(0, daysBack));   // a future day clamps to "now"
     setDatePickerOpen(false);
   }, []);
 
@@ -420,67 +439,6 @@ export default function Dashboard() {
                 ))}
               </div>
 
-              {pairPartner && (
-                <button
-                  className={`pill${comparePair ? " active" : ""}`}
-                  onClick={() => setComparePair((v) => !v)}
-                  title={`Overlay ${pairPartner.name || pairPartner.device_mac}`}
-                >
-                  <Icon name="device" size={13} />{" "}
-                  {comparePair ? "Hide" : "Compare"} {pairPartner.duct_role === "blower" ? "blower" : "filter"} unit
-                </button>
-              )}
-
-              <div className="row gap-sm" style={{ marginLeft: "auto" }}>
-                <button className="btn btn-icon" onClick={() => setOffset((o) => o + 1)} title="Previous period">
-                  <Icon name="chevron-left" size={16} />
-                </button>
-                <div style={{ position: "relative" }}>
-                  <button
-                    className="date-jump-btn"
-                    onClick={() => setDatePickerOpen((v) => !v)}
-                    title="Jump to a specific date"
-                    aria-haspopup="dialog"
-                    aria-expanded={datePickerOpen}
-                  >
-                    {formatIntervalLabel(range.hours, offset)}
-                  </button>
-
-                  {datePickerOpen && (
-                    <>
-                      <div className="date-jump-backdrop" onClick={() => setDatePickerOpen(false)} />
-                      <div className="date-jump-pop" role="dialog" aria-label="Jump to date">
-                        <label className="field-label" style={{ marginBottom: 6, display: "block" }}>
-                          JUMP TO DATE
-                        </label>
-                        <input
-                          type="date"
-                          className="input input-sm"
-                          autoFocus
-                          max={centralDateInputValue(new Date())}
-                          defaultValue={centralDateInputValue(
-                            new Date(Date.now() - offset * range.hours * 3600000)
-                          )}
-                          onChange={(e) => {
-                            if (e.target.value) jumpToDay(centralDayStartMs(e.target.value));
-                          }}
-                        />
-                        <p className="hint" style={{ marginTop: 6, fontSize: 11 }}>
-                          Opens that day in the 24H view ({chartTimeZoneLabel()}).
-                        </p>
-                      </div>
-                    </>
-                  )}
-                </div>
-                <button
-                  className="btn btn-icon"
-                  onClick={() => setOffset((o) => Math.max(0, o - 1))}
-                  disabled={offset === 0}
-                  title="Next period"
-                >
-                  <Icon name="chevron-right" size={16} />
-                </button>
-              </div>
             </div>
 
             <div className="dash-split">
@@ -490,6 +448,60 @@ export default function Dashboard() {
                   <div className="row wrap" style={{ marginBottom: 15 }}>
                     <span className="dot" style={{ background: metric.color, width: 10, height: 10 }} />
                     <h3 className="section-title grow">{metric.label}</h3>
+                    {/* Period navigation sits in the chart's own header rather
+                        than in the range row above: it only ever acts on this
+                        chart, and the arrows were previously separated from the
+                        graph they scrub by the whole metric pill row. */}
+                    <div className="row gap-sm">
+                      <button className="btn btn-icon" onClick={() => setOffset((o) => o + 1)} title="Previous period">
+                        <Icon name="chevron-left" size={16} />
+                      </button>
+                      <div style={{ position: "relative" }}>
+                        <button
+                          className="date-jump-btn"
+                          onClick={() => setDatePickerOpen((v) => !v)}
+                          title="Jump to a specific date"
+                          aria-haspopup="dialog"
+                          aria-expanded={datePickerOpen}
+                        >
+                          {formatIntervalLabel(range.hours, offset)}
+                        </button>
+
+                        {datePickerOpen && (
+                          <>
+                            <div className="date-jump-backdrop" onClick={() => setDatePickerOpen(false)} />
+                            <div className="date-jump-pop" role="dialog" aria-label="Jump to date">
+                              <label className="field-label" style={{ marginBottom: 6, display: "block" }}>
+                                JUMP TO DATE
+                              </label>
+                              <input
+                                type="date"
+                                className="input input-sm"
+                                autoFocus
+                                max={centralDateInputValue(new Date())}
+                                defaultValue={centralDateInputValue(
+                                  new Date(Date.now() - offset * range.hours * 3600000)
+                                )}
+                                onChange={(e) => {
+                                  if (e.target.value) jumpToDay(centralDayStartMs(e.target.value));
+                                }}
+                              />
+                              <p className="hint" style={{ marginTop: 6, fontSize: 11 }}>
+                                Opens that day in the 24H view ({chartTimeZoneLabel()}).
+                              </p>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      <button
+                        className="btn btn-icon"
+                        onClick={() => setOffset((o) => Math.max(0, o - 1))}
+                        disabled={offset === 0}
+                        title="Next period"
+                      >
+                        <Icon name="chevron-right" size={16} />
+                      </button>
+                    </div>
                     <span className="badge" style={{ background: `${statusColor}22`, color: statusColor }}>
                       <span className="dot" style={{ background: statusColor }} />
                       {status}
@@ -540,12 +552,29 @@ export default function Dashboard() {
                     />
                   )}
 
-                  {chartData.length > 0 && (
-                    <p className="hint" style={{ marginTop: 6, fontSize: 11.5 }}>
-                      Times shown in {chartTimeZoneLabel()}.
-                      {!isLine && " Click a bar to open that day in the 24H view."}
-                    </p>
-                  )}
+                  {/* Sits directly under the chart it acts on rather than up
+                      in the range controls: it only ever applies to the chart,
+                      and only appears for a paired device, so grouping it with
+                      the always-present period controls implied otherwise. */}
+                  <div className="row" style={{ marginTop: 6, gap: 10, alignItems: "center" }}>
+                    {chartData.length > 0 && (
+                      <p className="hint" style={{ fontSize: 11.5, margin: 0 }}>
+                        Times shown in {chartTimeZoneLabel()}.
+                        {!isLine && " Click a bar to open that day in the 24H view."}
+                      </p>
+                    )}
+                    <span className="grow" />
+                    {pairPartner && (
+                      <button
+                        className={`pill${comparePair ? " active" : ""}`}
+                        onClick={() => setComparePair((v) => !v)}
+                        title={`Overlay ${pairPartner.name || pairPartner.device_mac}`}
+                      >
+                        <Icon name="device" size={13} />{" "}
+                        {comparePair ? "Hide" : "Compare"} {pairPartner.duct_role === "blower" ? "blower" : "filter"} unit
+                      </button>
+                    )}
+                  </div>
 
                   <div className="chart-footer">
                     <div className="chart-footer-stats">

@@ -265,6 +265,22 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
   // device_baselines says "warm" the calibration is genuinely done and
   // we're only waiting for the next reading to be scored, which is a
   // different thing to tell the user.
+  // Y-axis bounds derived from what's actually plotted rather than pinned.
+  // A fixed [-20, 50] wasted the top half of the chart: real spectra here
+  // span roughly -21..+25 dB, so everything above 25 was blank and the few-dB
+  // differences that carry the whole signal were squeezed into the bottom
+  // 45% of the plot -- and anything below -20 clipped. Rounded outward to
+  // whole 5 dB steps so the ticks stay tidy and the axis doesn't twitch on
+  // every new reading.
+  const spectrumDomain = useMemo(() => {
+    const vals = isolatedSpectrum.flatMap((p) => [p.db, p.baselineDb])
+      .filter((v) => v != null && isFinite(v));
+    if (!vals.length) return [-20, 50];
+    const lo = Math.floor(Math.min(...vals) / 5) * 5 - 5;
+    const hi = Math.ceil(Math.max(...vals) / 5) * 5 + 5;
+    return [lo, hi];
+  }, [isolatedSpectrum]);
+
   const baselineWarm = baselineState === "warm";
   const isCalibrating = classification?.decision === "calibrating" && !baselineWarm;
   const awaitingFirstVerdict = classification?.decision === "calibrating" && baselineWarm;
@@ -498,7 +514,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
                           values in dB, and the section header above the
                           chart gives the rest of the context. */}
                       <YAxis
-                        domain={[-20, 50]}
+                        domain={spectrumDomain}
                         allowDataOverflow
                         tick={{ fill: theme.subtext, fontSize: 10, fontWeight: 600 }}
                         tickLine={false} axisLine={false} width={34}

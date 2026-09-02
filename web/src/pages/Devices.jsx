@@ -23,6 +23,11 @@ export default function Devices() {
 
   const [stats, setStats] = useState({});
   const [installDates, setInstallDates] = useState({});
+  // device_mac -> device_baselines.state. A device is "calibrating" until its
+  // baseline freezes (state === "warm"); until then the wake interval must not
+  // be edited, because changing it mid-warmup changes the spacing of the very
+  // samples the baseline is being fitted from.
+  const [baselineStates, setBaselineStates] = useState({});
 
   const [claimOpen, setClaimOpen] = useState(false);
   const [editingDevice, setEditingDevice] = useState(null);
@@ -58,6 +63,10 @@ export default function Devices() {
 
     setStats(nextStats);
     setInstallDates(nextInstall);
+
+    const { data: bl } = await supabase
+      .from("device_baselines").select("device_mac, state");
+    setBaselineStates(Object.fromEntries((bl || []).map((b) => [b.device_mac, b.state])));
   }, [devices]);
 
   useEffect(() => { loadStats(); }, [loadStats]);
@@ -99,6 +108,39 @@ export default function Devices() {
           .update({ paired_device_id: editingDevice.id, duct_role: opposite })
           .eq("id", pairedWith);
         if (backError) { setBusy(false); return alert(`Failed to pair partner: ${backError.message}`); }
+      }
+    }
+
+    // A paired blower/filter set is one logical installation on one duct, so
+    // the settings that describe the installation are mirrored onto the
+    // partner: property and the two intervals. Editing either half updates
+    // both, which stops the pair drifting into contradictory settings --
+    // particularly wake_interval, where a mismatch feeds lora_slot_seconds()
+    // and would silently pull both nodes onto the faster value anyway.
+    //
+    // Deliberately NOT shared:
+    //   name           - each node keeps its own. Sharing it made both cards
+    //                    read "P9 (LoRaWAN)" and destroyed P4's name on save,
+    //                    which is a lossy write: the old value is simply gone.
+    //                    The blower/filter badge already shows they are a set.
+    //   duct_role      - has to differ, that is the whole point of the pair
+    //   device_mac     - identity
+    //   hvac_location  - the two nodes sit at physically different points in
+    //                    the duct
+    //   tenant_*       - left per-device
+    const partnerId = pairedWith !== undefined ? pairedWith : previousPartner;
+    if (partnerId) {
+      const shared = {};
+      for (const k of ["property_id", "filter_interval_days", "wake_interval_seconds"]) {
+        if (k in deviceFields) shared[k] = deviceFields[k];
+      }
+      if (Object.keys(shared).length) {
+        const { error: shareError } = await supabase
+          .from("devices").update(shared).eq("id", partnerId);
+        if (shareError) {
+          setBusy(false);
+          return alert(`Saved this device, but failed to apply shared settings to its pair: ${shareError.message}`);
+        }
       }
     }
 
@@ -333,6 +375,9 @@ export default function Devices() {
         device={editingDevice}
         properties={properties}
         allDevices={devices}
+        calibrating={editingDevice
+          ? (baselineStates[editingDevice.device_mac] || "cold_start") !== "warm"
+          : false}
         onClose={() => setEditingDevice(null)}
         onSave={saveDevice}
         busy={busy}
@@ -351,6 +396,40 @@ export default function Devices() {
       />
     </>
   );
+}
+
+// Collapses a property's devices into render entries, so a paired
+// blower/filter set can be drawn as one linked unit rather than two cards
+// that happen to sit near each other.
+//
+// Only pairs when BOTH halves are in this property's list -- paired devices
+// should share a property now that saveDevice mirrors property_id, but a pair
+// created before that, or mid-edit, can still straddle two properties. Those
+// fall back to rendering individually rather than vanishing from one list.
+//
+// Blower is placed first so the pair always reads upstream-to-downstream,
+// matching airflow, regardless of insertion order.
+function groupPairs(devices) {
+  const byId = new Map(devices.map((d) => [d.id, d]));
+  const used = new Set();
+  const out = [];
+
+  for (const d of devices) {
+    if (used.has(d.id)) continue;
+    const partner = d.paired_device_id ? byId.get(d.paired_device_id) : null;
+    // Require the link to point back, so a stale one-sided paired_device_id
+    // cannot swallow an unrelated device into a pair.
+    if (partner && partner.paired_device_id === d.id && !used.has(partner.id)) {
+      used.add(d.id); used.add(partner.id);
+      const blower = d.duct_role === "blower" ? d : partner;
+      const filter = blower === d ? partner : d;
+      out.push({ kind: "pair", blower, filter });
+    } else {
+      used.add(d.id);
+      out.push({ kind: "single", device: d });
+    }
+  }
+  return out;
 }
 
 // ── One property and its devices ─────────────────────────────────────────────
@@ -386,18 +465,34 @@ function PropertyGroupCard({ property, propDevices, stats, installDates, onEdit,
         <p className="hint" style={{ padding: "4px 6px 10px" }}>No devices in this property yet.</p>
       ) : (
         <div className="device-grid">
-          {propDevices.map((d) => (
-            <DeviceCard
-              key={d.id}
-              device={d}
-              lastSeen={stats[d.id]?.lastSeen}
-              latest={stats[d.id]?.latest}
-              installedAt={installDates[d.id]}
-              onEdit={() => onEdit(d)}
-              onRemove={() => onRemove(d)}
-              onRecalibrate={() => onRecalibrate(d)}
-            />
-          ))}
+          {groupPairs(propDevices).map((entry) => {
+            const card = (d) => (
+              <DeviceCard
+                key={d.id}
+                device={d}
+                lastSeen={stats[d.id]?.lastSeen}
+                latest={stats[d.id]?.latest}
+                installedAt={installDates[d.id]}
+                onEdit={() => onEdit(d)}
+                onRemove={() => onRemove(d)}
+                onRecalibrate={() => onRecalibrate(d)}
+              />
+            );
+            if (entry.kind === "single") return card(entry.device);
+            return (
+              <div className="device-pair" key={`pair-${entry.blower.id}`}>
+                <div className="device-pair-label">
+                  <Icon name="link" size={12} />
+                  Linked duct pair
+                </div>
+                {card(entry.blower)}
+                <div className="device-pair-link" aria-hidden="true">
+                  <span><Icon name="link" size={13} /></span>
+                </div>
+                {card(entry.filter)}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -447,6 +542,15 @@ function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, o
         <div className="grow">
           <div className="row gap-sm">
             <span className="device-name truncate">{device.name || "Unnamed Device"}</span>
+            {/* A paired set shares its name, so without this the two cards are
+                indistinguishable. Role is the disambiguator, not location,
+                because location is free text and may be blank. */}
+            {device.duct_role && (
+              <span className="badge" style={{ background: "#6366f11f", color: "#6366f1" }}>
+                <Icon name={device.duct_role === "blower" ? "wind" : "layers"} size={10} />
+                {device.duct_role === "blower" ? "Blower" : "Filter"}
+              </span>
+            )}
             {!device._isOwner && (
               <span className="badge" style={{ background: "#0284c71f", color: "#0284c7" }}>
                 <Icon name="wrench" size={10} /> Technician
@@ -620,7 +724,7 @@ const WAKE_PRESETS = [
 ];
 const INTERVAL_PRESETS = [7, 14, 21, 30];
 
-function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy, schemaReady }) {
+function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy, schemaReady, calibrating }) {
   const [form, setForm] = useState(null);
   const [error, setError] = useState(null);
 
@@ -672,7 +776,10 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
           hvac_location: form.hvac_location.trim(),
           property_id: form.property_id || null,
           filter_interval_days: interval,
-          wake_interval_seconds: wake,
+          // Omitted entirely while calibrating rather than merely disabled in
+          // the UI: a disabled input is a hint, not a guarantee, and this
+          // value reaches the firmware.
+          ...(calibrating ? {} : { wake_interval_seconds: wake }),
           tenant_email: form.tenantEnabled ? form.tenant_email.trim().toLowerCase() : null,
           tenant_phone: form.tenantEnabled ? form.tenant_phone.trim() : null,
           // Only meaningful for LoRaWAN units; null on everything else so a
@@ -741,12 +848,6 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
           {device.is_lorawan && (
             <div className="field">
               <label className="field-label">DUCT PAIRING (LORAWAN)</label>
-              <p className="hint">
-                LoRaWAN nodes work in pairs, one either side of the filter. Pairing them
-                makes both sample the same moment, so the difference between them means
-                something — and lets the dashboard chart them together.
-              </p>
-
               <div className="row gap-sm" style={{ marginTop: 8 }}>
                 {["blower", "filter"].map((role) => (
                   <button
@@ -778,10 +879,6 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
                     </option>
                   ))}
               </select>
-              <p className="hint" style={{ marginTop: 6 }}>
-                The partner is given the opposite role automatically, and both units move to
-                the shorter of their two wake intervals so they share sampling boundaries.
-              </p>
             </div>
           )}
 
@@ -807,13 +904,25 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
             </div>
           </div>
 
+          {/* Locked while the baseline is still being fitted. The warmup
+              samples ARE spaced by this interval, so changing it mid-fit
+              changes the spacing of the data the covariance is computed
+              from -- half the baseline at one cadence and half at another,
+              which is exactly the narrow/mismatched-window problem the 20h
+              span requirement exists to prevent. Editable again the moment
+              the baseline freezes. */}
           <div className="field">
             <label className="field-label">WAKE INTERVAL</label>
-            <p className="hint">How often the device wakes up to collect data.</p>
-            <div className="row gap-sm">
+            <p className="hint">
+              {calibrating
+                ? "Locked while this device is calibrating — the warmup samples are spaced by this interval, so changing it now would corrupt the baseline being fitted."
+                : "How often the device wakes up to collect data."}
+            </p>
+            <div className="row gap-sm" style={calibrating ? { opacity: 0.55 } : undefined}>
               <input
                 className="input input-sm" style={{ width: 96, textAlign: "center", fontWeight: 700 }}
                 value={form.wake_interval_seconds} inputMode="numeric"
+                disabled={calibrating}
                 onChange={(e) => set({ wake_interval_seconds: e.target.value.replace(/\D/g, "") })}
               />
               <span className="hint">seconds</span>
@@ -822,12 +931,18 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
                 <button
                   key={p.value}
                   className={`pill${String(form.wake_interval_seconds) === String(p.value) ? " active" : ""}`}
-                  onClick={() => set({ wake_interval_seconds: p.value })}
+                  disabled={calibrating}
+                  onClick={() => { if (!calibrating) set({ wake_interval_seconds: p.value }); }}
                 >
                   {p.label}
                 </button>
               ))}
             </div>
+            {calibrating && (
+              <p className="hint" style={{ marginTop: 6 }}>
+                <Icon name="pulse" size={12} /> Calibrating — unlocks once the baseline finishes.
+              </p>
+            )}
           </div>
 
           <div className="field">

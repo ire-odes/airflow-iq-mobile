@@ -15,6 +15,24 @@ const when = (ts: unknown) =>
     ? new Date(ts).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })
     : "";
 
+// Device names, locations and property names are typed by users. The older
+// templates interpolate them raw; the new ones escape them, since an overdue
+// email goes to tenants who never chose those strings.
+const esc = (v: unknown) =>
+  String(v ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+// "2026-09-12" -> "Sep 12, 2026". Noon UTC so no timezone shifts the day.
+const dateOnly = (d: unknown) =>
+  typeof d === "string"
+    ? new Date(`${d}T12:00:00Z`).toLocaleDateString("en-US", { dateStyle: "medium", timeZone: "UTC" })
+    : "";
+
+const button = (href: string, label: string) =>
+  `<a href="${esc(href)}" style="display:inline-block;background:#007BFF;color:#fff;` +
+  `text-decoration:none;font-weight:700;padding:12px 20px;border-radius:10px">${esc(label)}</a>`;
+
 // deno-lint-ignore no-explicit-any
 function bodyLines(template: string, p: any): string[] {
   switch (template) {
@@ -51,6 +69,47 @@ function bodyLines(template: string, p: any): string[] {
           ? `It's been installed for <b>${p.days_since} days</b> (recommended interval: ${p.interval_days} days).`
           : "",
         `Please reach out to your property manager to schedule a replacement, or replace it yourself if that's part of your lease arrangement.`,
+      ];
+    case "filter_overdue": {
+      const where = [p.hvac_location, p.property_name].filter(Boolean).map(esc).join(" &middot; ");
+      const lines = [
+        p.is_test
+          ? `<span style="color:#b45309"><b>Test message</b> &mdash; no filter is actually overdue.</span>`
+          : "",
+        `The HVAC filter for <b>${esc(p.device_name ?? "your unit")}</b>${where ? ` (${where})` : ""} ` +
+          `was due for replacement on <b>${esc(dateOnly(p.due_on))}</b> and hasn't been marked as changed.`,
+        `This is reminder <b>${esc(p.day_number)} of ${esc(p.days_total ?? 5)}</b>. ` +
+          `One is sent each day until the filter is replaced or the change is acknowledged.`,
+      ];
+      if (p.recipient_role === "landlord" || p.recipient_role === "account_holder") {
+        // Surrogate accounts: the account is run by someone other than the
+        // landlord, and each side is told the other was notified.
+        if (p.recipient_role === "landlord" && p.managed_by) {
+          lines.push(`This AirFlow IQ account is managed on your behalf by <b>${esc(p.managed_by)}</b>, who has also been notified.`);
+        }
+        if (p.recipient_role === "account_holder" && p.landlord_email) {
+          lines.push(`You're receiving this as the account holder. The landlord, <b>${esc(p.landlord_email)}</b>, has been notified too.`);
+        }
+        lines.push(`Fitting a new AirFlow IQ-tagged filter is detected automatically and stops these reminders.`);
+        if (p.ack_url && p.ack_url !== "[sent]") {
+          lines.push(
+            `Already changed it? Let us know:`,
+            button(p.ack_url, "I've changed this filter"),
+            `<span style="color:#6b7280;font-size:13px">This link works once and expires in 14 days.</span>`,
+          );
+        }
+      } else {
+        lines.push(`Please contact your landlord or property manager to arrange a replacement.`);
+      }
+      return lines;
+    }
+    case "tenant_email_test":
+      return [
+        `This is a test message from AirFlow IQ.`,
+        p.device_name
+          ? `It confirms that filter notifications for <b>${esc(p.device_name)}</b> reach this address.`
+          : `It confirms that AirFlow IQ notifications reach this address.`,
+        `No action is needed.`,
       ];
     default:
       // Unknown template — send subject + payload fields rather than dropping it
@@ -108,8 +167,14 @@ Deno.serve(async (req) => {
           }),
         });
         if (!res.ok) throw new Error(`Resend ${res.status}: ${await res.text()}`);
+        // An acknowledgement link is a one-time credential. Once delivered, the
+        // only copy that should work is the one in the recipient's inbox, so
+        // it's blanked out of the stored payload.
+        const scrubbed = row.payload && typeof row.payload === "object" && row.payload.ack_url
+          ? { payload: { ...row.payload, ack_url: "[sent]" } }
+          : {};
         await admin.from("email_outbox")
-          .update({ status: "sent", sent_at: new Date().toISOString(), error: null })
+          .update({ status: "sent", sent_at: new Date().toISOString(), error: null, ...scrubbed })
           .eq("id", row.id);
         sent++;
       } catch (e) {

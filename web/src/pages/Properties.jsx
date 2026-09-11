@@ -303,6 +303,7 @@ function PropertyCard({ property, deviceCount, technicians, onEdit, onDelete, on
 function PropertyModal({ open, property, onClose, onSave, busy }) {
   const [form, setForm] = useState({
     name: "", address: "", city: "", region: "", contact_name: "", contact_phone: "",
+    landlord_email: "",
   });
   const [error, setError] = useState(null);
 
@@ -316,6 +317,7 @@ function PropertyModal({ open, property, onClose, onSave, busy }) {
       region: property?.region || "",
       contact_name: property?.contact_name || "",
       contact_phone: property?.contact_phone || "",
+      landlord_email: property?.landlord_email || "",
     });
   }, [open, property]);
 
@@ -323,6 +325,10 @@ function PropertyModal({ open, property, onClose, onSave, busy }) {
 
   const submit = () => {
     if (!form.name.trim()) return setError("Property name is required");
+    const landlord = form.landlord_email.trim().toLowerCase();
+    if (landlord && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(landlord)) {
+      return setError("Enter a valid landlord email");
+    }
     onSave({
       name: form.name.trim(),
       address: form.address.trim() || null,
@@ -330,6 +336,7 @@ function PropertyModal({ open, property, onClose, onSave, busy }) {
       region: form.region.trim() || null,
       contact_name: form.contact_name.trim() || null,
       contact_phone: form.contact_phone.trim() || null,
+      landlord_email: landlord || null,
     });
   };
 
@@ -385,6 +392,17 @@ function PropertyModal({ open, property, onClose, onSave, busy }) {
           onChange={(e) => set({ contact_name: e.target.value })} style={{ marginBottom: 8 }} />
         <input className="input" value={form.contact_phone} placeholder="Phone number"
           onChange={(e) => set({ contact_phone: e.target.value })} />
+      </div>
+
+      <div className="field">
+        <label className="field-label">LANDLORD EMAIL</label>
+        <p className="hint" style={{ marginBottom: 6 }}>
+          One address that receives the daily overdue-filter notices for every unit here.
+          Leave blank to use the landlord email from Account settings, or your account email
+          if none is set.
+        </p>
+        <input className="input" type="email" value={form.landlord_email} placeholder="landlord@example.com"
+          onChange={(e) => set({ landlord_email: e.target.value })} />
       </div>
     </Modal>
   );

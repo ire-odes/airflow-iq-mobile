@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
 import { ScopeProvider } from "./context/ScopeContext";
 import Sidebar from "./components/Sidebar";
@@ -9,9 +9,16 @@ import Devices from "./pages/Devices";
 import Properties from "./pages/Properties";
 import Orders from "./pages/Orders";
 import Account from "./pages/Account";
+import Ack from "./pages/Ack";
 
 export default function App() {
   const { session, loading } = useAuth();
+  const { pathname } = useLocation();
+
+  // The filter-change acknowledgement page is reached from an email, usually
+  // with no session. It authorises by its one-time token, so it renders the
+  // same whether or not anyone is signed in -- and outside the app shell.
+  if (pathname === "/ack") return <Ack />;
 
   if (loading) {
     return (

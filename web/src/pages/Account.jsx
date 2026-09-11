@@ -56,11 +56,51 @@ export default function Account() {
 
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600); };
 
+  const [acksEnabled, setAcksEnabled] = useState(false);
+  const [acksBusy, setAcksBusy] = useState(false);
+
+  // Explicit landlord address for accounts run on a landlord's behalf.
+  const [notifyLandlord, setNotifyLandlord] = useState("");
+  const [landlordDraft, setLandlordDraft] = useState("");
+  const [landlordBusy, setLandlordBusy] = useState(false);
+
+  const toggleAcks = async () => {
+    const next = !acksEnabled;
+    setAcksBusy(true);
+    const { error } = await supabase.from("profiles")
+      .update({ interactive_landlord_acks: next }).eq("id", userId);
+    setAcksBusy(false);
+    if (error) return flash(`Couldn't update: ${error.message}`);
+    setAcksEnabled(next);
+    flash(next ? "Landlord acknowledgements on" : "Landlord acknowledgements off");
+  };
+
+  const saveLandlord = async () => {
+    const v = landlordDraft.trim().toLowerCase();
+    if (v && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) return flash("Enter a valid email address");
+    // The holder is already emailed; entering their own address changes nothing
+    // and would make the account look like it has a separate landlord.
+    if (v && v === email.toLowerCase()) return flash("That's your own address — leave this blank instead");
+    setLandlordBusy(true);
+    const { error } = await supabase.from("profiles")
+      .update({ notify_landlord_email: v || null }).eq("id", userId);
+    setLandlordBusy(false);
+    if (error) return flash(`Couldn't save: ${error.message}`);
+    setNotifyLandlord(v);
+    setLandlordDraft(v);
+    flash(v ? `Overdue notices will also go to ${v}` : "Landlord email cleared");
+  };
+
   useEffect(() => {
     if (!userId) return;
 
-    supabase.from("profiles").select("full_name").eq("id", userId).maybeSingle()
-      .then(({ data }) => setDisplayName(data?.full_name || ""));
+    supabase.from("profiles").select("full_name, interactive_landlord_acks, notify_landlord_email").eq("id", userId).maybeSingle()
+      .then(({ data }) => {
+        setDisplayName(data?.full_name || "");
+        setAcksEnabled(!!data?.interactive_landlord_acks);
+        setNotifyLandlord(data?.notify_landlord_email || "");
+        setLandlordDraft(data?.notify_landlord_email || "");
+      });
 
     supabase.from("technician_assignments").select("id, technician_email")
       .eq("landlord_id", userId).maybeSingle()
@@ -186,7 +226,7 @@ export default function Account() {
         </svg>
       </div>
 
-      <header className="topbar topbar-gradient">
+      <header className="topbar topbar-gradient account-topbar">
         <div className="topbar-titles">
           <div className="topbar-eyebrow">Settings</div>
           <h1 className="topbar-title">Account</h1>
@@ -199,16 +239,14 @@ export default function Account() {
         </div>
       </header>
 
-      <div className="page" style={{ maxWidth: 860 }}>
+      <div className="page page-account" style={{ maxWidth: 860 }}>
+        {/* Phones hide the header bar, which is where the toast lives on
+            desktop, so confirmations float above the tab bar instead. */}
+        {toast && <div className="mobile-toast m-only">{toast}</div>}
+
         {/* Identity banner */}
-        <div
-          className="row"
-          style={{
-            background: "linear-gradient(120deg, #0b2f66, #007BFF)",
-            borderRadius: 20, padding: 24, color: "#fff", marginBottom: 26, gap: 18,
-          }}
-        >
-          <div className="avatar" style={{ width: 62, height: 62, borderRadius: 20, fontSize: 26, background: "rgba(255,255,255,0.24)" }}>
+        <div className="identity-banner">
+          <div className="avatar identity-avatar">
             {initial}
           </div>
           <div className="grow">
@@ -284,6 +322,49 @@ export default function Account() {
               <div className="list-label" style={{ marginTop: 2 }}>{isDark ? "On" : "Off"}</div>
             </div>
             <button className={`switch${isDark ? " on" : ""}`} onClick={toggleTheme} aria-label="Toggle dark mode" />
+          </div>
+        </div>
+
+        {/* Notifications */}
+        <div className="section-head">
+          <div>
+            <h2 className="section-title">Notifications</h2>
+            <p className="section-sub">Overdue-filter notices for the properties you own.</p>
+          </div>
+        </div>
+        <div className="card">
+          <div className="list-row">
+            <div className="list-icon"><Icon name="check" size={17} /></div>
+            <div className="grow">
+              <div className="list-value">Interactive Landlord Acknowledgements</div>
+              <div className="list-label" style={{ marginTop: 2 }}>
+                Overdue-filter emails to the landlord include a secure one-time link to confirm the
+                filter was changed, and device cards get a "Mark filter changed" button. Confirming
+                stops the reminders and restarts the filter life.
+              </div>
+            </div>
+            <button className={`switch${acksEnabled ? " on" : ""}`} onClick={toggleAcks}
+              disabled={acksBusy} aria-label="Toggle interactive landlord acknowledgements" />
+          </div>
+          <div className="list-row" style={{ alignItems: "flex-start" }}>
+            <div className="list-icon"><Icon name="mail" size={17} /></div>
+            <div className="grow">
+              <div className="list-value">Notify landlord email</div>
+              <div className="list-label" style={{ marginTop: 2 }}>
+                Running this account for someone else — as a property manager, relative or
+                technician? Enter the landlord's own address. Overdue-filter notices go to them as
+                well as to you, and each of you is told the other was notified. A property's own
+                landlord email still takes priority for that property.
+              </div>
+              <div className="row gap-sm" style={{ marginTop: 10 }}>
+                <input className="input input-sm grow" type="email" placeholder="landlord@example.com"
+                  value={landlordDraft} onChange={(e) => setLandlordDraft(e.target.value)} />
+                <button className="btn btn-sm btn-primary" onClick={saveLandlord}
+                  disabled={landlordBusy || landlordDraft.trim().toLowerCase() === notifyLandlord}>
+                  {landlordBusy ? <span className="spinner" /> : "Save"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -433,8 +514,14 @@ export default function Account() {
           </button>
         </div>
 
-        <p className="hint" style={{ textAlign: "center", marginTop: 30 }}>
-          AirFlow IQ Desktop v{APP_VERSION}
+        {/* Expo keeps Sign Out at the foot of Account. On phones the header
+            that carries it on desktop is hidden, so it lives here. */}
+        <button className="signout-btn m-only" onClick={confirmSignOut}>
+          <Icon name="logout" size={18} /> Sign Out
+        </button>
+
+        <p className="hint account-version" style={{ textAlign: "center", marginTop: 30 }}>
+          AirFlow IQ Web v{APP_VERSION}
         </p>
       </div>
 

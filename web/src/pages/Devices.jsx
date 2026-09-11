@@ -16,6 +16,17 @@ import {
 
 export default function Devices() {
   const { grouped, devices, properties, schemaReady, reload, loading } = useScope();
+  const { session } = useAuth();
+
+  // Interactive Landlord Acknowledgements (Account settings). Gates the
+  // "Mark filter changed" button; the database checks it again server-side.
+  const [acksEnabled, setAcksEnabled] = useState(false);
+  useEffect(() => {
+    const uid = session?.user?.id;
+    if (!uid) return;
+    supabase.from("profiles").select("interactive_landlord_acks").eq("id", uid).maybeSingle()
+      .then(({ data }) => setAcksEnabled(!!data?.interactive_landlord_acks));
+  }, [session?.user?.id]);
 
   // Split so a technician's serviced properties render as their own section,
   // never mixed in with the properties/devices you actually own.
@@ -70,6 +81,17 @@ export default function Devices() {
         if (firstSeen) nextInstall[dev.id] = firstSeen;
       }
     }));
+
+    // An acknowledged filter change restarts the clock exactly as a new RFID
+    // tag does, so the later of the two is the effective install date. Same
+    // rule as device_filter_cycles() in the database, so the bar and the
+    // emails agree on when a filter is due.
+    const { data: acks } = await supabase.from("filter_acknowledgements")
+      .select("device_id, acknowledged_at").in("device_id", devices.map((d) => d.id));
+    for (const a of acks || []) {
+      const prev = nextInstall[a.device_id];
+      if (!prev || new Date(a.acknowledged_at) > new Date(prev)) nextInstall[a.device_id] = a.acknowledged_at;
+    }
 
     setStats(nextStats);
     setInstallDates(nextInstall);
@@ -235,6 +257,19 @@ export default function Devices() {
     },
   });
 
+  // Owner confirms the filter was replaced without waiting for a new RFID tag
+  // to be read. Restarts the filter clock and stops any overdue reminders.
+  const acknowledgeFilter = (device) => setConfirm({
+    title: "Mark filter changed",
+    message: `Confirm the HVAC filter for "${device.name || device.device_mac}" has been replaced? This stops any overdue reminders and restarts its filter life.`,
+    confirmLabel: "Mark changed",
+    action: async () => {
+      const { error } = await supabase.rpc("acknowledge_filter_change", { p_device_id: device.id });
+      if (error) return alert(`Could not record the change: ${error.message}`);
+      await loadStats();
+    },
+  });
+
   const runConfirm = async () => {
     setBusy(true);
     await confirm.action();
@@ -366,13 +401,13 @@ export default function Devices() {
                 installDates={installDates}
                 onEdit={setEditingDevice}
                 onRemove={removeDevice}
-                onRecalibrate={recalibrateDevice}
+                onRecalibrate={recalibrateDevice} onAcknowledge={acksEnabled ? acknowledgeFilter : null}
               />
             ))}
 
             {technicianGroups.length > 0 && (
               <>
-                <div className="section-head">
+                <div className="section-head label-head">
                   <div>
                     <h2 className="section-title">Technician Devices</h2>
                     <p className="section-sub">You can edit the name and location of these devices.</p>
@@ -387,7 +422,7 @@ export default function Devices() {
                     installDates={installDates}
                     onEdit={setEditingDevice}
                     onRemove={removeDevice}
-                    onRecalibrate={recalibrateDevice}
+                    onRecalibrate={recalibrateDevice} onAcknowledge={acksEnabled ? acknowledgeFilter : null}
                   />
                 ))}
               </>
@@ -426,7 +461,7 @@ export default function Devices() {
 }
 
 // ── One property and its devices ─────────────────────────────────────────────
-function PropertyGroupCard({ property, propDevices, stats, installDates, onEdit, onRemove, onRecalibrate }) {
+function PropertyGroupCard({ property, propDevices, stats, installDates, onEdit, onRemove, onRecalibrate, onAcknowledge }) {
   return (
     <div className="property-group">
       <div className="property-head">
@@ -469,6 +504,7 @@ function PropertyGroupCard({ property, propDevices, stats, installDates, onEdit,
                 onEdit={() => onEdit(d)}
                 onRemove={() => onRemove(d)}
                 onRecalibrate={() => onRecalibrate(d)}
+                onAcknowledge={onAcknowledge ? () => onAcknowledge(d) : null}
               />
             );
             if (entry.kind === "single") return card(entry.device);
@@ -515,7 +551,14 @@ function BatteryStageIcon({ stage }) {
 }
 
 // ── Device card ──────────────────────────────────────────────────────────────
-function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, onRecalibrate }) {
+// "a@x.com", "a@x.com +2", or "No tenant".
+const tenantSummary = (d) => {
+  const list = d.tenant_emails?.length ? d.tenant_emails : d.tenant_email ? [d.tenant_email] : [];
+  if (!list.length) return "No tenant";
+  return list.length === 1 ? list[0] : `${list[0]} +${list.length - 1}`;
+};
+
+function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, onRecalibrate, onAcknowledge }) {
   const status = getOnlineStatus(lastSeen);
   const statusColor = status === "online" ? "#22c55e" : status === "idle" ? "#f59e0b" : "#9ca3af";
   const statusLabel = status === "online" ? "Online" : status === "idle" ? "Idle" : "Offline";
@@ -584,11 +627,11 @@ function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, o
         </div>
       )}
 
-      <div className="row wrap" style={{ background: "var(--inputBg)", borderRadius: 11, padding: 10, gap: 14 }}>
+      <div className="row wrap device-info-row" style={{ background: "var(--inputBg)", borderRadius: 11, padding: 10, gap: 14 }}>
         <span className="meta-row"><Icon name="clock" size={13} /> Filter every {device.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS}d</span>
         <span className="meta-row"><Icon name="pulse" size={13} /> Wake {wakeLabel(device.wake_interval_seconds)}</span>
         <span className="meta-row truncate">
-          <Icon name="user" size={13} /> {device.tenant_email || "No tenant"}
+          <Icon name="user" size={13} /> {tenantSummary(device)}
         </span>
       </div>
 
@@ -597,6 +640,12 @@ function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, o
         {device._isOwner && (
           <button className="btn btn-sm" onClick={onRecalibrate} title="Reset the acoustic baseline">
             <Icon name="refresh" size={13} /> Recalibrate
+          </button>
+        )}
+        {/* Offered once the filter is nearly due, which covers overdue too. */}
+        {device._isOwner && onAcknowledge && fp && fp.pct >= 90 && (
+          <button className="btn btn-sm" onClick={onAcknowledge} title="Confirm the filter was replaced">
+            <Icon name="check" size={13} /> Mark filter changed
           </button>
         )}
         {device._isOwner && (
@@ -712,21 +761,38 @@ function ClaimDeviceModal({ open, onClose, onClaimed }) {
 // Presets must stay inside the DB CHECK constraints: wake ≥ 10 min, filter ≤ 30 days.
 const INTERVAL_PRESETS = [7, 14, 21, 30];
 
+// Matches devices_tenant_emails_max and the format check in sync_tenant_emails.
+const MAX_TENANTS = 10;
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+const wakeText = (s) => {
+  const h = (s || 14400) / 3600;
+  if (h === 24) return "Once a day";
+  return Number.isInteger(h) ? `Every ${h} hour${h === 1 ? "" : "s"}` : `Every ${wakeLabel(s)}`;
+};
+
 function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy, schemaReady, calibrating }) {
   const [form, setForm] = useState(null);
   const [error, setError] = useState(null);
+  const [testState, setTestState] = useState(null);   // null | "sending" | "sent"
+  const [testMsg, setTestMsg] = useState(null);
 
   useEffect(() => {
     if (!device) return setForm(null);
     setError(null);
+    setTestState(null);
+    setTestMsg(null);
     setForm({
       name: device.name || "",
       hvac_location: device.hvac_location || "",
       property_id: device.property_id || "",
       filter_interval_days: device.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS,
-      tenant_email: device.tenant_email || "",
+      tenant_emails: device.tenant_emails?.length
+        ? [...device.tenant_emails]
+        : device.tenant_email ? [device.tenant_email] : [],
+      newTenant: "",
       tenant_phone: device.tenant_phone || "",
-      tenantEnabled: !!(device.tenant_email || device.tenant_phone),
+      tenantEnabled: !!(device.tenant_emails?.length || device.tenant_email || device.tenant_phone),
       duct_role: device.duct_role || "",
       pairedWith: device.paired_device_id || "",
     });
@@ -737,6 +803,27 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
   const isOwner = device._isOwner;
 
+  const addTenant = () => {
+    const em = form.newTenant.trim().toLowerCase();
+    if (!em) return;
+    if (!EMAIL_RE.test(em)) return setError(`"${em}" isn't a valid email`);
+    if (form.tenant_emails.includes(em)) return set({ newTenant: "" });
+    if (form.tenant_emails.length >= MAX_TENANTS) return setError(`Up to ${MAX_TENANTS} tenant emails per unit`);
+    setError(null);
+    set({ tenant_emails: [...form.tenant_emails, em], newTenant: "" });
+  };
+
+  // Sends to the SAVED addresses -- the server reads the list from the device,
+  // so a test can't be pointed at an address that was typed but never saved.
+  const sendTest = async () => {
+    setTestState("sending");
+    setTestMsg(null);
+    const { data, error: e } = await supabase.rpc("send_tenant_test_email", { p_device_id: device.id });
+    if (e) { setTestState(null); setTestMsg(e.message); return; }
+    setTestState("sent");
+    setTestMsg(`Queued ${data} test email${data === 1 ? "" : "s"} to the saved tenant addresses. They should arrive within a couple of minutes.`);
+  };
+
   const submit = () => {
     if (!form.name.trim()) return setError("Device name is required");
 
@@ -745,9 +832,16 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
       return setError(`Filter interval must be between ${FILTER_INTERVAL_MIN_DAYS} and ${FILTER_INTERVAL_MAX_DAYS} days`);
     }
 
-    if (form.tenantEnabled && form.tenant_email && !form.tenant_email.includes("@")) {
-      return setError("Enter a valid tenant email");
+    // An address typed but not yet added still counts, so someone who types it
+    // and presses Save doesn't silently lose it.
+    const pending = form.newTenant.trim().toLowerCase();
+    if (form.tenantEnabled && pending && !EMAIL_RE.test(pending)) {
+      return setError(`"${pending}" isn't a valid email`);
     }
+    const tenantEmails = form.tenantEnabled
+      ? [...new Set([...form.tenant_emails, ...(pending ? [pending] : [])])]
+      : [];
+    if (tenantEmails.length > MAX_TENANTS) return setError(`Up to ${MAX_TENANTS} tenant emails per unit`);
 
     // Technicians may only rename/relocate; owner-only fields are left alone.
     const payload = isOwner
@@ -756,11 +850,13 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
           hvac_location: form.hvac_location.trim(),
           property_id: form.property_id || null,
           filter_interval_days: interval,
-          // wake_interval_seconds is deliberately NOT written here any more.
-          // It is fixed fleet-wide by the column default and a CHECK
-          // constraint (migration 20260910000000); the client no longer has
-          // an opinion about it.
-          tenant_email: form.tenantEnabled ? form.tenant_email.trim().toLowerCase() : null,
+          // wake_interval_seconds is deliberately NOT written here. It is set
+          // by AirFlow IQ, and trg_guard_wake_interval (20260911000000)
+          // rejects changes from anyone who isn't an admin.
+          //
+          // tenant_email is derived from this list by trg_sync_tenant_emails
+          // (it stays the first address, for the Expo app, which reads one).
+          tenant_emails: tenantEmails,
           tenant_phone: form.tenantEnabled ? form.tenant_phone.trim() : null,
           // Only meaningful for LoRaWAN units; null on everything else so a
           // WiFi device can't accidentally carry a duct role.
@@ -884,7 +980,8 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
             </div>
           </div>
 
-          {/* Wake interval is fixed fleet-wide at 4 hours and is no longer
+          {/* Wake interval is set by AirFlow IQ (4 hours unless an admin sets an
+              exception for the unit) and is no longer
               user-editable. It is a battery decision, not a preference: at
               the measured 7.3s active cycle a device burns ~35 mAh a day at
               10-minute wakes against ~1.5 mAh at 4 hours -- a 24x difference
@@ -900,9 +997,9 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
             <div className="row" style={{ background: "var(--inputBg)", borderRadius: 12, padding: "12px 14px" }}>
               <Icon name="pulse" size={15} style={{ color: "var(--subtext)" }} />
               <div className="grow">
-                <div style={{ fontWeight: 700 }}>Every 4 hours</div>
+                <div style={{ fontWeight: 700 }}>{wakeText(device.wake_interval_seconds)}</div>
                 <p className="hint" style={{ marginTop: 2 }}>
-                  Fixed for all devices to protect battery life. While
+                  Set by AirFlow IQ to protect battery life. While
                   calibrating, a device samples every minute automatically and
                   then returns to this schedule.
                 </p>
@@ -916,7 +1013,7 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
             <div className="row" style={{ background: "var(--inputBg)", borderRadius: 12, padding: "12px 14px" }}>
               <div className="grow">
                 <div style={{ fontSize: 14, fontWeight: 600 }}>Notify tenant</div>
-                <p className="hint">Tenant is emailed and/or texted when the filter needs changing.</p>
+                <p className="hint">Tenants are emailed when the filter is due, then daily for 5 days if it goes overdue.</p>
               </div>
               <button
                 className={`switch${form.tenantEnabled ? " on" : ""}`}
@@ -926,16 +1023,47 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
             </div>
             {form.tenantEnabled && (
               <>
-                <input
-                  className="input" type="email" placeholder="tenant@example.com"
-                  value={form.tenant_email} style={{ marginTop: 8 }}
-                  onChange={(e) => set({ tenant_email: e.target.value })}
-                />
+                <div className="tenant-list">
+                  {form.tenant_emails.map((em) => (
+                    <span key={em} className="tenant-chip">
+                      <span className="truncate">{em}</span>
+                      <button
+                        type="button" aria-label={`Remove ${em}`}
+                        onClick={() => set({ tenant_emails: form.tenant_emails.filter((x) => x !== em) })}
+                      >
+                        <Icon name="close" size={12} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                <div className="row gap-sm" style={{ marginTop: 8 }}>
+                  <input
+                    className="input grow" type="email" placeholder="tenant@example.com"
+                    value={form.newTenant}
+                    onChange={(e) => set({ newTenant: e.target.value })}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTenant(); } }}
+                  />
+                  <button type="button" className="btn" onClick={addTenant}
+                    disabled={form.tenant_emails.length >= MAX_TENANTS}>
+                    <Icon name="plus" size={14} /> Add
+                  </button>
+                </div>
+                <p className="hint" style={{ marginTop: 6 }}>
+                  Up to {MAX_TENANTS} addresses. Each one gets the due-date reminder and the daily overdue notices.
+                </p>
                 <input
                   className="input" type="tel" placeholder="+1 555 123 4567 (optional, for SMS)"
                   value={form.tenant_phone} style={{ marginTop: 8 }}
                   onChange={(e) => set({ tenant_phone: e.target.value })}
                 />
+                {device.tenant_emails?.length > 0 && (
+                  <button type="button" className="btn btn-sm" style={{ marginTop: 10 }}
+                    onClick={sendTest} disabled={testState === "sending"}>
+                    <Icon name="mail" size={13} />
+                    {testState === "sending" ? "Sending…" : testState === "sent" ? "Test sent" : "Send test email"}
+                  </button>
+                )}
+                {testMsg && <p className="hint" style={{ marginTop: 6 }}>{testMsg}</p>}
               </>
             )}
           </div>

@@ -140,7 +140,7 @@ export default function Orders() {
         <div className="orders-split">
           {/* ── Catalog ──────────────────────────────────────────────────── */}
           <div>
-            <div className="section-head" style={{ marginTop: 0 }}>
+            <div className="section-head label-head" style={{ marginTop: 0 }}>
               <div>
                 <h2 className="section-title">Device Catalog</h2>
                 <p className="section-sub">Sensors and filter tags, shipped to you.</p>
@@ -171,7 +171,7 @@ export default function Orders() {
               </div>
             )}
 
-            <div className="section-head">
+            <div className="section-head label-head">
               <div>
                 <h2 className="section-title">Order History</h2>
                 <p className="section-sub">Payment and shipment status for past orders.</p>
@@ -250,8 +250,8 @@ export default function Orders() {
 
 function ProductRow({ product, quantity, onAdd, onRemove }) {
   return (
-    <article className="card row" style={{ padding: 16, gap: 14, alignItems: "flex-start" }}>
-      <div className="list-icon" style={{ width: 48, height: 48, borderRadius: 14, color: "var(--accent)" }}>
+    <article className="card row product-row">
+      <div className="list-icon product-icon">
         <Icon name="device" size={22} />
       </div>
       <div className="grow">

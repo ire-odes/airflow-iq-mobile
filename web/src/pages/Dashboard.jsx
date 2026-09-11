@@ -427,7 +427,7 @@ export default function Dashboard() {
 
             {/* Range + window controls */}
             <div className="row wrap" style={{ gap: 12, marginBottom: 18 }}>
-              <div className="pill-row">
+              <div className="pill-row range-pills">
                 {TIME_RANGES.map((t, i) => (
                   <button
                     key={t.label}
@@ -444,15 +444,15 @@ export default function Dashboard() {
             <div className="dash-split">
               {/* ── Left column ─────────────────────────────────────────── */}
               <div className="col" style={{ gap: 18 }}>
-                <section className="card card-pad card-lift">
-                  <div className="row wrap" style={{ marginBottom: 15 }}>
+                <section className="card card-pad card-lift chart-card">
+                  <div className="row wrap chart-head" style={{ marginBottom: 15 }}>
                     <span className="dot" style={{ background: metric.color, width: 10, height: 10 }} />
                     <h3 className="section-title grow">{metric.label}</h3>
                     {/* Period navigation sits in the chart's own header rather
                         than in the range row above: it only ever acts on this
                         chart, and the arrows were previously separated from the
                         graph they scrub by the whole metric pill row. */}
-                    <div className="row gap-sm">
+                    <div className="row gap-sm period-nav">
                       <button className="btn btn-icon" onClick={() => setOffset((o) => o + 1)} title="Previous period">
                         <Icon name="chevron-left" size={16} />
                       </button>
@@ -508,7 +508,7 @@ export default function Dashboard() {
                     </span>
                   </div>
 
-                  <div className="pill-row" style={{ marginBottom: 16 }}>
+                  <div className="pill-row metric-pills" style={{ marginBottom: 16 }}>
                     {METRICS.map((m) => {
                       const active = metric.key === m.key;
                       return (
@@ -604,7 +604,7 @@ export default function Dashboard() {
                 </section>
 
                 <div>
-                  <div className="section-head" style={{ marginTop: 0 }}>
+                  <div className="section-head dash-section-head" style={{ marginTop: 0 }}>
                     <div>
                       <h2 className="section-title">My Metrics</h2>
                       <p className="section-sub">Click any card for detail</p>
@@ -642,7 +642,13 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                <FilterStatus deviceIds={scopedDeviceIds} fallbackIntervalDays={fallbackInterval} />
+                <div>
+                  {/* Phones only: Expo titles this section above its card, not inside it. */}
+                  <div className="section-head dash-section-head m-only">
+                    <h2 className="section-title">Filter Status</h2>
+                  </div>
+                  <FilterStatus deviceIds={scopedDeviceIds} fallbackIntervalDays={fallbackInterval} />
+                </div>
               </div>
 
               {/* ── Right column ────────────────────────────────────────── */}

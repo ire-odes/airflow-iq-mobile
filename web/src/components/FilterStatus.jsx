@@ -164,8 +164,8 @@ export default function FilterStatus({ deviceIds, fallbackIntervalDays = DEFAULT
       : "Good";
 
   return (
-    <section className="card card-pad" style={{ display: "flex", flexDirection: "column", gap: 15 }}>
-      <div className="row">
+    <section className="card card-pad filter-card" style={{ display: "flex", flexDirection: "column", gap: 15 }}>
+      <div className="row filter-card-head">
         <div className="property-icon"><Icon name="clock" size={18} /></div>
         <div className="grow">
           <h3 className="section-title">Filter Status</h3>
@@ -208,7 +208,7 @@ export default function FilterStatus({ deviceIds, fallbackIntervalDays = DEFAULT
       )}
 
       <div style={{ background: "var(--inputBg)", borderRadius: 14, overflow: "hidden" }}>
-        <div className="list-row">
+        <div className="list-row filter-info-row">
           <div className="list-icon"><Icon name="calendar" size={16} /></div>
           <div className="grow">
             <div className="list-label">Current filter installed</div>
@@ -217,7 +217,7 @@ export default function FilterStatus({ deviceIds, fallbackIntervalDays = DEFAULT
             </div>
           </div>
         </div>
-        <div className="list-row">
+        <div className="list-row filter-info-row">
           <div className="list-icon"><Icon name="swap" size={16} /></div>
           <div className="grow">
             <div className="list-label">Last filter change</div>
@@ -225,7 +225,7 @@ export default function FilterStatus({ deviceIds, fallbackIntervalDays = DEFAULT
           </div>
         </div>
         {currentRfid && (
-          <div className="list-row">
+          <div className="list-row filter-info-row">
             <div className="list-icon"><Icon name="rfid" size={16} /></div>
             <div className="grow">
               <div className="list-label">Current RFID tag</div>
@@ -235,7 +235,7 @@ export default function FilterStatus({ deviceIds, fallbackIntervalDays = DEFAULT
         )}
       </div>
 
-      <button className="btn btn-block" onClick={() => setShowHistory((s) => !s)}>
+      <button className="btn btn-block history-toggle" onClick={() => setShowHistory((s) => !s)}>
         <Icon name={showHistory ? "chevron-up" : "chevron-down"} size={15} />
         {showHistory ? "Hide" : "Show"} change history ({changes.length})
       </button>

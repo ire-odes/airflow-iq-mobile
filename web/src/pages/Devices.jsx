@@ -2,15 +2,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { NavLink } from "react-router-dom";
 import Icon from "../components/Icon";
 import Modal, { ConfirmModal } from "../components/Modal";
+import DeviceTree from "../components/DeviceTree";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../context/AuthContext";
 import { useScope, UNASSIGNED_ID } from "../context/ScopeContext";
+import { groupPairs } from "../lib/devicePairs";
 import { getFilterProgress, getOnlineStatus, getBatteryStage } from "../lib/metrics";
 import { timeAgo, wakeLabel } from "../lib/format";
 import {
-  DEFAULT_FILTER_INTERVAL_DAYS, DEFAULT_WAKE_INTERVAL_SECONDS,
+  DEFAULT_FILTER_INTERVAL_DAYS,
   FILTER_INTERVAL_MIN_DAYS, FILTER_INTERVAL_MAX_DAYS,
-  WAKE_INTERVAL_MIN_SECONDS, WAKE_INTERVAL_MAX_SECONDS,
 } from "../lib/config";
 
 export default function Devices() {
@@ -33,6 +34,15 @@ export default function Devices() {
   const [editingDevice, setEditingDevice] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const [busy, setBusy] = useState(false);
+
+  // Persisted so the tree survives navigating away and back. Someone who
+  // works from the hierarchy shouldn't have to reopen it on every visit.
+  const [treeOpen, setTreeOpen] = useState(
+    () => localStorage.getItem("devices_tree_open") === "1"
+  );
+  useEffect(() => {
+    localStorage.setItem("devices_tree_open", treeOpen ? "1" : "0");
+  }, [treeOpen]);
 
   // Per-device last-seen, battery, and current filter install date.
   const loadStats = useCallback(async () => {
@@ -131,7 +141,7 @@ export default function Devices() {
     const partnerId = pairedWith !== undefined ? pairedWith : previousPartner;
     if (partnerId) {
       const shared = {};
-      for (const k of ["property_id", "filter_interval_days", "wake_interval_seconds"]) {
+      for (const k of ["property_id", "filter_interval_days"]) {
         if (k in deviceFields) shared[k] = deviceFields[k];
       }
       if (Object.keys(shared).length) {
@@ -263,6 +273,15 @@ export default function Devices() {
           <h1 className="topbar-title">Devices &amp; Properties</h1>
         </div>
         <div className="topbar-actions">
+          <button
+            className={`btn${treeOpen ? " btn-primary" : ""}`}
+            onClick={() => setTreeOpen((o) => !o)}
+            aria-expanded={treeOpen}
+            title="Show the property and device hierarchy"
+          >
+            <Icon name="tree" size={15} /> Device Tree
+            <Icon name={treeOpen ? "chevron-up" : "chevron-down"} size={14} />
+          </button>
           <NavLink to="/properties" className="btn">
             <Icon name="building" size={15} /> Manage Properties
           </NavLink>
@@ -305,6 +324,14 @@ export default function Devices() {
             <div className="stat-num">{properties.length}</div><div className="stat-lbl">Properties</div>
           </div>
         </div>
+
+        {/* Sits above the card grid rather than replacing it: the tree answers
+            "how is the fleet wired together", the cards answer "what state is
+            each device in", and reading one usually prompts a look at the
+            other. */}
+        {treeOpen && !loading && (
+          <DeviceTree grouped={grouped} onEdit={setEditingDevice} />
+        )}
 
         {counts.dueSoon > 0 && (
           <div className="banner" style={{ background: "#f973161a", borderColor: "#f9731655", color: "#f97316", marginBottom: 20 }}>
@@ -396,40 +423,6 @@ export default function Devices() {
       />
     </>
   );
-}
-
-// Collapses a property's devices into render entries, so a paired
-// blower/filter set can be drawn as one linked unit rather than two cards
-// that happen to sit near each other.
-//
-// Only pairs when BOTH halves are in this property's list -- paired devices
-// should share a property now that saveDevice mirrors property_id, but a pair
-// created before that, or mid-edit, can still straddle two properties. Those
-// fall back to rendering individually rather than vanishing from one list.
-//
-// Blower is placed first so the pair always reads upstream-to-downstream,
-// matching airflow, regardless of insertion order.
-function groupPairs(devices) {
-  const byId = new Map(devices.map((d) => [d.id, d]));
-  const used = new Set();
-  const out = [];
-
-  for (const d of devices) {
-    if (used.has(d.id)) continue;
-    const partner = d.paired_device_id ? byId.get(d.paired_device_id) : null;
-    // Require the link to point back, so a stale one-sided paired_device_id
-    // cannot swallow an unrelated device into a pair.
-    if (partner && partner.paired_device_id === d.id && !used.has(partner.id)) {
-      used.add(d.id); used.add(partner.id);
-      const blower = d.duct_role === "blower" ? d : partner;
-      const filter = blower === d ? partner : d;
-      out.push({ kind: "pair", blower, filter });
-    } else {
-      used.add(d.id);
-      out.push({ kind: "single", device: d });
-    }
-  }
-  return out;
 }
 
 // ── One property and its devices ─────────────────────────────────────────────
@@ -717,11 +710,6 @@ function ClaimDeviceModal({ open, onClose, onClaimed }) {
 
 // ── Edit a device ────────────────────────────────────────────────────────────
 // Presets must stay inside the DB CHECK constraints: wake ≥ 10 min, filter ≤ 30 days.
-const WAKE_PRESETS = [
-  { label: "10m", value: 600 }, { label: "30m", value: 1800 },
-  { label: "1h", value: 3600 }, { label: "6h", value: 21600 },
-  { label: "24h", value: 86400 },
-];
 const INTERVAL_PRESETS = [7, 14, 21, 30];
 
 function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy, schemaReady, calibrating }) {
@@ -736,7 +724,6 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
       hvac_location: device.hvac_location || "",
       property_id: device.property_id || "",
       filter_interval_days: device.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS,
-      wake_interval_seconds: device.wake_interval_seconds || DEFAULT_WAKE_INTERVAL_SECONDS,
       tenant_email: device.tenant_email || "",
       tenant_phone: device.tenant_phone || "",
       tenantEnabled: !!(device.tenant_email || device.tenant_phone),
@@ -758,13 +745,6 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
       return setError(`Filter interval must be between ${FILTER_INTERVAL_MIN_DAYS} and ${FILTER_INTERVAL_MAX_DAYS} days`);
     }
 
-    const wake = parseInt(form.wake_interval_seconds, 10) || DEFAULT_WAKE_INTERVAL_SECONDS;
-    if (wake < WAKE_INTERVAL_MIN_SECONDS || wake > WAKE_INTERVAL_MAX_SECONDS) {
-      return setError(
-        `Wake interval must be between ${WAKE_INTERVAL_MIN_SECONDS / 60} minutes and ${WAKE_INTERVAL_MAX_SECONDS / 3600} hours`
-      );
-    }
-
     if (form.tenantEnabled && form.tenant_email && !form.tenant_email.includes("@")) {
       return setError("Enter a valid tenant email");
     }
@@ -776,10 +756,10 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
           hvac_location: form.hvac_location.trim(),
           property_id: form.property_id || null,
           filter_interval_days: interval,
-          // Omitted entirely while calibrating rather than merely disabled in
-          // the UI: a disabled input is a hint, not a guarantee, and this
-          // value reaches the firmware.
-          ...(calibrating ? {} : { wake_interval_seconds: wake }),
+          // wake_interval_seconds is deliberately NOT written here any more.
+          // It is fixed fleet-wide by the column default and a CHECK
+          // constraint (migration 20260910000000); the client no longer has
+          // an opinion about it.
           tenant_email: form.tenantEnabled ? form.tenant_email.trim().toLowerCase() : null,
           tenant_phone: form.tenantEnabled ? form.tenant_phone.trim() : null,
           // Only meaningful for LoRaWAN units; null on everything else so a
@@ -904,45 +884,31 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
             </div>
           </div>
 
-          {/* Locked while the baseline is still being fitted. The warmup
-              samples ARE spaced by this interval, so changing it mid-fit
-              changes the spacing of the data the covariance is computed
-              from -- half the baseline at one cadence and half at another,
-              which is exactly the narrow/mismatched-window problem the 20h
-              span requirement exists to prevent. Editable again the moment
-              the baseline freezes. */}
+          {/* Wake interval is fixed fleet-wide at 4 hours and is no longer
+              user-editable. It is a battery decision, not a preference: at
+              the measured 7.3s active cycle a device burns ~35 mAh a day at
+              10-minute wakes against ~1.5 mAh at 4 hours -- a 24x difference
+              in the one term anyone controls. Leaving it adjustable meant a
+              single edit could cut field life by an order of magnitude, and
+              the battery ADC is not trustworthy enough (see the calibration
+              warning in the firmware) for anyone to notice before the device
+              went quiet.
+              Shown read-only rather than hidden, so the cadence behind the
+              readings stays discoverable. */}
           <div className="field">
             <label className="field-label">WAKE INTERVAL</label>
-            <p className="hint">
-              {calibrating
-                ? "Locked while this device is calibrating — the warmup samples are spaced by this interval, so changing it now would corrupt the baseline being fitted."
-                : "How often the device wakes up to collect data."}
-            </p>
-            <div className="row gap-sm" style={calibrating ? { opacity: 0.55 } : undefined}>
-              <input
-                className="input input-sm" style={{ width: 96, textAlign: "center", fontWeight: 700 }}
-                value={form.wake_interval_seconds} inputMode="numeric"
-                disabled={calibrating}
-                onChange={(e) => set({ wake_interval_seconds: e.target.value.replace(/\D/g, "") })}
-              />
-              <span className="hint">seconds</span>
-              <span className="grow" />
-              {WAKE_PRESETS.map((p) => (
-                <button
-                  key={p.value}
-                  className={`pill${String(form.wake_interval_seconds) === String(p.value) ? " active" : ""}`}
-                  disabled={calibrating}
-                  onClick={() => { if (!calibrating) set({ wake_interval_seconds: p.value }); }}
-                >
-                  {p.label}
-                </button>
-              ))}
+            <div className="row" style={{ background: "var(--inputBg)", borderRadius: 12, padding: "12px 14px" }}>
+              <Icon name="pulse" size={15} style={{ color: "var(--subtext)" }} />
+              <div className="grow">
+                <div style={{ fontWeight: 700 }}>Every 4 hours</div>
+                <p className="hint" style={{ marginTop: 2 }}>
+                  Fixed for all devices to protect battery life. While
+                  calibrating, a device samples every minute automatically and
+                  then returns to this schedule.
+                </p>
+              </div>
+              <Icon name="lock" size={15} style={{ color: "var(--subtext)" }} />
             </div>
-            {calibrating && (
-              <p className="hint" style={{ marginTop: 6 }}>
-                <Icon name="pulse" size={12} /> Calibrating — unlocks once the baseline finishes.
-              </p>
-            )}
           </div>
 
           <div className="field">

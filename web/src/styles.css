@@ -30,7 +30,16 @@ p { margin: 0; }
 ::-webkit-scrollbar-thumb:hover { background: var(--subtext); }
 
 /* ── App shell ─────────────────────────────────────────────────────────────── */
-.shell { display: flex; height: 100vh; overflow: hidden; }
+.shell { display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
+
+/* The Expo-style bottom tab bar exists only below the tablet breakpoint. */
+.tabbar { display: none; }
+
+/* Text inside the header pickers. White pills on the desktop gradient, so
+   fixed colours here; the mobile header re-themes them, which is why these
+   are classes rather than the inline styles they used to be. */
+.pill-trigger-label { color: #0b2f66; }
+.pill-trigger-sub { color: #6b7a99; }
 
 .sidebar {
   width: 248px;
@@ -555,8 +564,168 @@ p { margin: 0; }
 .device-name { font-size: 15px; font-weight: 700; }
 .meta-row { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--subtext); }
 
-.progress-track { height: 6px; border-radius: 3px; overflow: hidden; }
-.progress-fill { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
+/* -- Device tree ------------------------------------------------------------
+   The Property -> Device hierarchy as a top-down org chart: root at the top,
+   each level fanning out below its parent on a shared horizontal bus.
+
+   Connectors are borders on ::before / ::after, not SVG. Each child owns the
+   half of the bus on its own side plus the vertical drop into itself, so the
+   bus assembles from the children and needs no measuring -- an SVG would have
+   to know the row's width and every column centre in advance. Rounding is a
+   single corner radius where a child's bus segment turns down into it, which
+   is why the elbows curve rather than meeting square.
+
+   Nodes carry a name and a MAC and nothing else. Status colour, battery,
+   filter life and the rest live on the cards below; repeating them here made
+   every node a dense little table and buried the hierarchy, which is the only
+   thing this view exists to show.
+   -------------------------------------------------------------------------- */
+.tree-panel {
+  --org-drop: 24px;         /* height of the connector band above each level */
+  --org-gap: 7px;           /* horizontal breathing room per column */
+  --org-radius: 11px;       /* the rounding on each elbow */
+  --org-line: 1.6px;
+  --tree-line: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 14px 16px 16px;
+  margin-bottom: 22px;
+  box-shadow: var(--shadow);
+  animation: tree-drop 0.18s ease;
+}
+@keyframes tree-drop {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.tree-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  padding-bottom: 12px; margin-bottom: 12px;
+  border-bottom: 1px solid var(--divider);
+}
+.tree-zoom {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 2px; border-radius: 10px;
+  background: var(--inputBg); border: 1px solid var(--border);
+}
+.tree-zoom .btn { border: none; background: none; padding: 5px; }
+.tree-zoom-value {
+  min-width: 38px; text-align: center;
+  font-size: 11.5px; font-weight: 700; color: var(--subtext);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Scroll the chart, never the page. A wide hierarchy is inherent to a
+   top-down layout -- every sibling gets its own column -- so this is the
+   expected case, not an overflow bug. min-width keeps a narrow chart centred
+   instead of pinned left. */
+.tree-scroll { overflow-x: auto; padding: 6px 2px 8px; }
+
+.org, .org ul { list-style: none; margin: 0; padding: 0; }
+.org {
+  display: flex; justify-content: center;
+  width: max-content; min-width: 100%;
+}
+
+/* Each level is a row of columns, offset down by the connector band. */
+.org ul {
+  position: relative;
+  display: flex; justify-content: center;
+  padding-top: var(--org-drop);
+}
+.org li {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center;
+  padding: var(--org-drop) var(--org-gap) 0;
+}
+
+/* Left half of the bus (::before) and right half plus the drop (::after).
+   Percentages resolve against the li's padding box, whose centre is the
+   node's centre because the horizontal padding is symmetric. */
+.org li::before, .org li::after {
+  content: "";
+  position: absolute; top: 0; right: 50%;
+  width: 50%; height: var(--org-drop);
+  border-top: var(--org-line) solid var(--tree-line);
+}
+.org li::after {
+  right: auto; left: 50%;
+  border-left: var(--org-line) solid var(--tree-line);
+}
+
+/* Ends of the row: nothing to connect to beyond them, so the bus stops. */
+.org li:first-child::before, .org li:last-child::after { border: 0 none; }
+
+/* ...which would also delete the last child's drop, since the drop lives on
+   ::after. Give it back on ::before as a right border, and round the corner
+   where the bus turns down. Same for the first child's left turn. */
+.org li:last-child::before {
+  border-right: var(--org-line) solid var(--tree-line);
+  border-radius: 0 var(--org-radius) 0 0;
+}
+.org li:first-child::after { border-radius: var(--org-radius) 0 0 0; }
+
+/* An only child needs no bus at all -- the parent's drop lands on it. */
+.org li:only-child { padding-top: 0; }
+.org li:only-child::before, .org li:only-child::after { display: none; }
+
+/* The root has no parent to connect to. */
+.org > li { padding-top: 0; }
+.org > li::before, .org > li::after { display: none; }
+
+/* Drop from a node down to its children's bus. */
+.org ul::before {
+  content: "";
+  position: absolute; top: 0; left: 50%;
+  width: 0; height: var(--org-drop);
+  border-left: var(--org-line) solid var(--tree-line);
+}
+
+/* -- Nodes ----------------------------------------------------------------
+   Same outline treatment as the dashboard's metric widgets: an accent-tinted
+   border doing the work, no fills and no colour coding. */
+.org-node {
+  position: relative;
+  width: 150px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  box-shadow: var(--shadow);
+  text-align: left;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+button.org-node { cursor: pointer; display: block; }
+button.org-node:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: var(--shadowLg);
+}
+
+.org-node-body { display: block; min-width: 0; }
+.org-node-head { display: flex; align-items: center; gap: 6px; }
+.org-title {
+  display: block; min-width: 0;
+  font-size: 12.5px; font-weight: 700; letter-spacing: -0.01em;
+}
+.org-sub {
+  display: block; min-width: 0; margin-top: 2px;
+  font-size: 10px; color: var(--subtext); font-weight: 600;
+}
+
+.org-root { width: 118px; text-align: center; }
+.org-root .org-title { text-align: center; }
+
+/* The pair header is a label, not a device -- narrower, and its own children
+   sit one level further down. */
+.org-pair { width: 118px; }
+.org-pair .org-node-head { justify-content: center; }
+
+@media (max-width: 620px) {
+  .tree-panel { --org-gap: 4px; padding: 12px; }
+  .org-node { width: 132px; }
+}
 
 /* ── Needs Attention banner ─────────────────────────────────────────────────
    One line, reads as a plain warning — same treatment as every other alert
@@ -693,3 +862,147 @@ p { margin: 0; }
 }
 .chart-tip-label { font-size: 11px; color: var(--subtext); font-weight: 600; }
 .chart-tip-value { font-size: 16px; font-weight: 800; margin-top: 2px; }
+
+
+/* ==========================================================================
+   Mobile / tablet -- formatted after the Expo app (ire-odes/airflow-iq-mobile)
+   --------------------------------------------------------------------------
+   Below 900px the web app takes the Expo app's shape instead of a squeezed
+   desktop layout:
+
+     Expo                                   here
+     bottom Tabs: Dashboard / Devices /     .tabbar -- same four, same order,
+       Orders / Account                       active #007BFF, labels 11px/600
+     header on page bg: greeting 13/500,    .topbar -- no gradient, same type
+       title 28/800 -0.5, 20px sides          scale and gutters
+     cards radius 20, statsBar in one row   .card, .stat-strip
+     tinted pills (#EBF5FF on #007BFF)      header buttons + pickers
+     sign out and dark mode on Account      sidebar hidden entirely
+     bottom-sheet modals with a handle      .modal below 560px
+
+   900px rather than a phone-only width because the Expo app sets
+   supportsTablet and shows the same tab bar on iPad.
+   ========================================================================== */
+@media (max-width: 900px) {
+  /* ---- Navigation ------------------------------------------------------ */
+  .sidebar { display: none; }
+
+  .tabbar {
+    display: flex;
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 80;
+    background: var(--card);
+    border-top: 1px solid var(--border);
+    padding: 8px 6px max(12px, env(safe-area-inset-bottom));
+  }
+  .tabbar-item {
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; min-height: 48px;
+    color: var(--subtext);
+    font-size: 11px; font-weight: 600;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tabbar-item.active { color: #007BFF; }
+
+  /* The bar is fixed over the scroll pane; pad the pane so the last card can
+     scroll clear of it. */
+  .main { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+
+  /* ---- Header ---------------------------------------------------------- */
+  .topbar,
+  .topbar-gradient {
+    background: var(--bg);
+    backdrop-filter: none;
+    border-bottom: none;
+    padding: max(18px, env(safe-area-inset-top)) 20px 14px;
+    flex-wrap: wrap; align-items: flex-end; gap: 12px;
+  }
+  .topbar-titles { width: 100%; }
+  .topbar-titles .row { flex-wrap: wrap; }       /* title + property pill */
+  .topbar-eyebrow,
+  .topbar-gradient .topbar-eyebrow { font-size: 13px; font-weight: 500; color: var(--subtext); }
+  .topbar-title,
+  .topbar-gradient .topbar-title { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; color: var(--text); }
+  .topbar-gradient .hint { color: var(--subtext); }
+
+  /* Actions drop under the title and wrap. Wrap, not a horizontal scroller:
+     the property and device pickers open absolutely-positioned menus, and an
+     overflow container would clip them. */
+  .topbar-actions { margin-left: 0; width: 100%; flex-wrap: wrap; gap: 8px; }
+
+  /* Expo's header buttons are tinted pills. Mixed from the accent rather than
+     hard-coded to #EBF5FF, so dark mode lands near Expo's #1c2a3a instead of
+     a glaring light pill. */
+  .topbar-gradient .btn {
+    background: color-mix(in srgb, var(--accent) 12%, var(--card));
+    border-color: transparent; color: var(--accent);
+    border-radius: 20px; padding: 8px 14px;
+  }
+  .topbar-gradient .btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 18%, var(--card));
+  }
+  .topbar-gradient .btn-primary,
+  .topbar-gradient .btn-primary:hover:not(:disabled) {
+    background: #007BFF; border-color: #007BFF; color: #fff;
+  }
+  .topbar-gradient .btn-danger,
+  .topbar-gradient .btn-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, #ef4444 12%, var(--card)); color: #ef4444;
+  }
+  .topbar-gradient .btn-icon { padding: 9px; border-radius: 14px; }
+
+  /* Property + device pickers: white pills on the desktop gradient, Expo's
+     tinted device pill here. */
+  .property-switcher,
+  .gradient-pill-trigger {
+    background: color-mix(in srgb, var(--accent) 12%, var(--card));
+    color: var(--accent); box-shadow: none; border-radius: 20px;
+  }
+  .property-switcher:hover,
+  .gradient-pill-trigger:hover { background: color-mix(in srgb, var(--accent) 18%, var(--card)); }
+  .pill-trigger-label { color: var(--accent); }
+  .pill-trigger-sub { color: var(--subtext); }
+
+  /* ---- Content --------------------------------------------------------- */
+  .page { padding: 4px 20px 24px; }
+
+  .card { border-radius: 20px; }
+  .device-card { padding: 16px; }
+  .device-grid { grid-template-columns: 1fr; }
+  .device-pair { grid-column: span 1; grid-template-columns: 1fr; }
+
+  /* Expo's statsBar is a single row of equal cells. The desktop auto-fit grid
+     would stack five stats 2-2-1 at phone width. */
+  .stat-strip { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 1fr; }
+  .stat-cell { padding: 14px 4px; }
+  .stat-lbl { font-size: 10px; }
+
+  .dropdown-menu { min-width: min(268px, calc(100vw - 40px)); max-width: calc(100vw - 40px); }
+}
+
+@media (max-width: 560px) {
+  /* Bottom sheets, as the Expo modals are: full width, anchored to the bottom
+     edge, with the same 36x4 drag handle. */
+  .modal-overlay { align-items: end; padding: 0; }
+  .modal {
+    max-width: 100%; width: 100%;
+    border-radius: 24px 24px 0 0; border-bottom: none;
+    max-height: 92dvh;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .modal::before {
+    content: ""; flex-shrink: 0;
+    width: 36px; height: 4px; border-radius: 2px;
+    background: var(--border); margin: 10px auto 0;
+  }
+
+  /* Inputs under 16px make iOS Safari zoom the whole page on focus. */
+  .input, .input-sm, select, textarea { font-size: 16px; }
+}
+
+/* Coarse pointers get larger hit areas regardless of width -- a tablet is
+   wide but still finger-driven. */
+@media (pointer: coarse) {
+  .btn-icon { padding: 10px; }
+  .dropdown-item { padding-top: 12px; padding-bottom: 12px; }
+}

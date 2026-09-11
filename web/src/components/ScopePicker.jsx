@@ -41,12 +41,12 @@ export default function ScopePicker() {
           <Icon name={selectedDevice ? "device" : "chart"} size={15} />
         </div>
         <div className="grow" style={{ textAlign: "left", minWidth: 0 }}>
-          <div className="truncate" style={{ fontSize: 13.5, fontWeight: 700, color: "#0b2f66" }}>{label}</div>
-          <div className="truncate" style={{ fontSize: 11, color: "#6b7a99", fontWeight: 600 }}>
+          <div className="truncate pill-trigger-label" style={{ fontSize: 13.5, fontWeight: 700 }}>{label}</div>
+          <div className="truncate pill-trigger-sub" style={{ fontSize: 11, fontWeight: 600 }}>
             {sublabel}
           </div>
         </div>
-        <Icon name="chevron-down" size={15} style={{ color: "#6b7a99" }} />
+        <Icon name="chevron-down" size={15} className="pill-trigger-sub" />
       </button>
 
       {open && (

@@ -68,6 +68,10 @@ export function ThemeProvider({ children }) {
     const root = document.documentElement;
     Object.entries(theme).forEach(([k, v]) => root.style.setProperty(`--${k}`, v));
     root.style.colorScheme = isDark ? "dark" : "light";
+    // Mobile browser chrome (address bar, iOS status area) follows the
+    // in-app toggle, not only the OS setting the static meta tags encode.
+    document.querySelectorAll('meta[name="theme-color"]')
+      .forEach((m) => m.setAttribute("content", theme.bg));
     localStorage.setItem(STORAGE_KEY, isDark ? "dark" : "light");
   }, [theme, isDark]);
 

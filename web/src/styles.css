@@ -564,6 +564,13 @@ p { margin: 0; }
 .device-name { font-size: 15px; font-weight: 700; }
 .meta-row { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--subtext); }
 
+/* Filter-life bar on the device cards. These were lost when the device-tree
+   block replaced everything between .meta-row and the banner below, which is
+   where they happened to sit. The track then rendered with no height and
+   collapsed to nothing, so the bar disappeared while its label stayed. */
+.progress-track { height: 6px; border-radius: 3px; overflow: hidden; }
+.progress-fill { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
+
 /* -- Device tree ------------------------------------------------------------
    The Property -> Device hierarchy as a top-down org chart: root at the top,
    each level fanning out below its parent on a shared horizontal bus.

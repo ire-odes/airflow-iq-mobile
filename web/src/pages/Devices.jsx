@@ -576,7 +576,7 @@ function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, o
           <Icon name="device" size={20} />
         </div>
         <div className="grow">
-          <div className="row gap-sm">
+          <div className="row gap-sm device-title-row">
             <span className="device-name truncate">{device.name || "Unnamed Device"}</span>
             {/* A paired set shares its name, so without this the two cards are
                 indistinguishable. Role is the disambiguator, not location,

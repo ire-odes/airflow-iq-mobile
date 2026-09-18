@@ -104,6 +104,19 @@ export function getRangeStatus(v, r) {
   return "normal";
 }
 
+// The later of several timestamps, any of which may be null, returned as the
+// original value so callers can keep passing it to timeAgo() and friends.
+export function latestTs(...values) {
+  let best = null;
+  let bestMs = -Infinity;
+  for (const v of values) {
+    if (!v) continue;
+    const ms = parseTs(v).getTime();
+    if (ms > bestMs) { best = v; bestMs = ms; }
+  }
+  return best;
+}
+
 export function getOnlineStatus(lastSeen) {
   if (!lastSeen) return "unknown";
   const diff = Date.now() - parseTs(lastSeen).getTime();

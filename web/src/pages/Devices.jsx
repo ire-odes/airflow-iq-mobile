@@ -7,7 +7,8 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../context/AuthContext";
 import { useScope, UNASSIGNED_ID } from "../context/ScopeContext";
 import { groupPairs } from "../lib/devicePairs";
-import { getFilterProgress, getOnlineStatus, getBatteryStage } from "../lib/metrics";
+import { getFilterProgress, getOnlineStatus, getBatteryStage, latestTs } from "../lib/metrics";
+import { getLastUploads } from "../lib/audioRecordings";
 import { timeAgo, wakeLabel } from "../lib/format";
 import {
   DEFAULT_FILTER_INTERVAL_DAYS,
@@ -62,7 +63,7 @@ export default function Devices() {
     const nextStats = {};
     const nextInstall = {};
 
-    await Promise.all(devices.map(async (dev) => {
+    const [uploads] = await Promise.all([getLastUploads(devices), Promise.all(devices.map(async (dev) => {
       const [{ data: logs }, { data: rfidLogs }] = await Promise.all([
         supabase.from("sensor_logs").select("recorded_at, battery")
           .eq("device_id", dev.id).order("recorded_at", { ascending: false }).limit(1),
@@ -71,7 +72,7 @@ export default function Devices() {
           .order("recorded_at", { ascending: false }).limit(100),
       ]);
 
-      if (logs?.length) nextStats[dev.id] = { lastSeen: logs[0].recorded_at, latest: logs[0] };
+      if (logs?.length) nextStats[dev.id] = { latest: logs[0] };
 
       if (rfidLogs?.length) {
         // The oldest log still carrying the current tag is when it was fitted.
@@ -80,7 +81,13 @@ export default function Devices() {
         const firstSeen = withCurrent[withCurrent.length - 1]?.recorded_at;
         if (firstSeen) nextInstall[dev.id] = firstSeen;
       }
-    }));
+    }))]);
+
+    // Last seen = newest telemetry OR newest clip upload -- see getLastUploads.
+    for (const dev of devices) {
+      const lastSeen = latestTs(nextStats[dev.id]?.latest?.recorded_at, uploads[dev.id]);
+      if (lastSeen) nextStats[dev.id] = { ...nextStats[dev.id], lastSeen };
+    }
 
     // An acknowledged filter change restarts the clock exactly as a new RFID
     // tag does, so the later of the two is the effective install date. Same
@@ -102,6 +109,36 @@ export default function Devices() {
   }, [devices]);
 
   useEffect(() => { loadStats(); }, [loadStats]);
+
+  // Keep Online / Last seen current without reloading the page. Deliberately
+  // not loadStats(), which costs two queries per device: this is two queries
+  // for the whole fleet -- every clip upload, plus any telemetry from the last
+  // 15 minutes -- and it only ever moves last-seen forward. Skipped while the
+  // tab is hidden so a forgotten tab doesn't poll all night.
+  const refreshLastSeen = useCallback(async () => {
+    if (!devices.length || document.visibilityState !== "visible") return;
+    const since = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+    const [uploads, { data: recent }] = await Promise.all([
+      getLastUploads(devices),
+      supabase.from("sensor_logs").select("device_id, recorded_at")
+        .in("device_id", devices.map((d) => d.id)).gte("recorded_at", since),
+    ]);
+    setStats((prev) => {
+      const next = { ...prev };   // always a new object, so "Last seen N min ago" re-renders too
+      const bump = (id, ts) => {
+        const t = latestTs(next[id]?.lastSeen, ts);
+        if (t) next[id] = { ...next[id], lastSeen: t };
+      };
+      for (const r of recent || []) bump(r.device_id, r.recorded_at);
+      for (const [id, ts] of Object.entries(uploads)) bump(id, ts);
+      return next;
+    });
+  }, [devices]);
+
+  useEffect(() => {
+    const timer = setInterval(refreshLastSeen, 30 * 1000);
+    return () => clearInterval(timer);
+  }, [refreshLastSeen]);
 
   const refresh = async () => { await reload(); await loadStats(); };
 

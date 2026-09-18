@@ -3,7 +3,8 @@ import { NavLink } from "react-router-dom";
 import Icon from "./Icon";
 import { supabase } from "../lib/supabase";
 import { useScope } from "../context/ScopeContext";
-import { getOnlineStatus, getFilterProgress } from "../lib/metrics";
+import { getOnlineStatus, getFilterProgress, latestTs } from "../lib/metrics";
+import { getLastUploads } from "../lib/audioRecordings";
 import { DEFAULT_FILTER_INTERVAL_DAYS } from "../lib/config";
 
 // ============================================================================
@@ -27,6 +28,7 @@ export default function PriorityQueue() {
       setLoading(true);
 
       const next = {};
+      const uploadsP = getLastUploads(devices);   // same last-seen rule as the Devices page
       await Promise.all(devices.map(async (dev) => {
         const [{ data: logs }, { data: rfidLogs }] = await Promise.all([
           supabase.from("sensor_logs").select("recorded_at")
@@ -45,6 +47,10 @@ export default function PriorityQueue() {
 
         next[dev.id] = { lastSeen: logs?.[0]?.recorded_at || null, installedAt };
       }));
+      const uploads = await uploadsP;
+      for (const dev of devices) {
+        if (next[dev.id]) next[dev.id].lastSeen = latestTs(next[dev.id].lastSeen, uploads[dev.id]);
+      }
 
       if (!cancelled) { setHealth(next); setLoading(false); }
     })();

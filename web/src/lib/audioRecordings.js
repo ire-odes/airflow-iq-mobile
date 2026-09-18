@@ -105,6 +105,27 @@ export async function getLatestRecording(deviceMac) {
   return { kind: "audio", updatedAt: row.updated_at, url: signed.signedUrl, classification };
 }
 
+// Latest clip upload per device, keyed by devices.id -- one query for the set.
+//
+// "Last seen" can't come from sensor_logs alone. Burst-mode firmware (v2)
+// uploads a clip every minute while the blower runs but sends telemetry only
+// on its normal wakes, roughly every 12 minutes, so a device working at its
+// hardest looked idle. Any contact means the device is alive; callers take the
+// later of this and the newest telemetry.
+export async function getLastUploads(devices) {
+  const macs = devices.map((d) => d.device_mac).filter(Boolean);
+  if (!macs.length) return {};
+  const { data, error } = await supabase
+    .from("audio_logs")
+    .select("device_id, updated_at")
+    .in("device_id", macs);
+  if (error || !data) return {};
+  const byMac = Object.fromEntries(data.map((r) => [r.device_id, r.updated_at]));
+  return Object.fromEntries(
+    devices.filter((d) => byMac[d.device_mac]).map((d) => [d.id, byMac[d.device_mac]])
+  );
+}
+
 // Downsamples a decoded AudioBuffer to `bins` peak amplitudes for waveform rendering.
 export function computePeaks(buffer, bins = 220) {
   const data = buffer.getChannelData(0);

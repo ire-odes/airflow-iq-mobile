@@ -39,6 +39,33 @@ const TRIM_LEADING_SECONDS = 0.05; // drop the mic-startup click at the very sta
 // needed upstream.
 const ISOLATED_BAND_MAX_HZ = 500;
 
+// Silence gate -- the same decision the ML pipeline makes before a clip is
+// allowed to reach a device's baseline (SPECTRAL_GATE_MIN_MEDIAN_DB in
+// ML/service/poll_and_infer.py). A clip at or below this median is treated as
+// "the blower wasn't running" and produces no reading at all, which is why the
+// panel can show a fresh recording while the baseline's reading count sits
+// still. This tag is what explains that gap to the user.
+//
+// The median is taken across ALL 72 bins computeSpectrum() returns, not the
+// 20-500 Hz slice the chart draws, because that is what the pipeline does.
+// Measured separation is wide: blower-on clips sit at +3.7..+7.5 dB, silent
+// ones at -26..-44 dB.
+//
+// One caveat, stated rather than hidden: the browser trims
+// TRIM_LEADING_SECONDS off the front before analysing and the Python side
+// does not, so the two can differ by a fraction of a dB. Against a 30 dB gap
+// that never changes the verdict.
+const SILENCE_GATE_MEDIAN_DB = 2.5;
+
+// numpy-compatible median: an even-length array averages the two middle
+// values, so this matches np.median() over the same 72 bins.
+function medianDb(points) {
+  const v = points.map((p) => p.db).filter((d) => Number.isFinite(d)).sort((a, b) => a - b);
+  if (!v.length) return null;
+  const mid = Math.floor(v.length / 2);
+  return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+}
+
 // Returns a new AudioBuffer with the first `seconds` removed from every
 // channel — used once, right after decode, so the waveform, duration, and
 // playback all agree on the trimmed clip.
@@ -251,6 +278,10 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
     [spectrum, baselineSpectrum]
   );
 
+  // Full 72-bin median, not isolatedSpectrum -- see SILENCE_GATE_MEDIAN_DB.
+  const gateMedianDb = useMemo(() => (spectrum.length ? medianDb(spectrum) : null), [spectrum]);
+  const isSilentClip = gateMedianDb != null && gateMedianDb <= SILENCE_GATE_MEDIAN_DB;
+
   const classification = recording?.classification || null;
   // "calibrating" means the device hasn't finished its acoustic warmup --
   // the classifier alone is unreliable on a brand-new environment (a real
@@ -306,6 +337,23 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
             {recording?.updatedAt ? `Recorded ${timeAgo(recording.updatedAt)}` : "No device selected"}
           </p>
         </div>
+        {recording?.kind === "audio" && gateMedianDb != null && (
+          <span
+            className="badge"
+            style={isSilentClip
+              ? { background: "#f59e0b1f", color: "#f59e0b" }
+              : { background: "var(--inputBg)", color: "var(--subtext)" }}
+            title={`Silence gate: median ${gateMedianDb.toFixed(1)} dB across all 72 bins, `
+              + `cut at ${SILENCE_GATE_MEDIAN_DB} dB. `
+              + (isSilentClip
+                ? "The blower was off, so this clip was skipped -- no verdict and no baseline sample."
+                : "The blower was running, so this clip counts toward the baseline.")}
+          >
+            <Icon name={isSilentClip ? "warning" : "waveform"} size={11} />
+            {isSilentClip ? "Silent" : "Blower on"}
+          </span>
+        )}
+
         {recording && (
           isCalibrating ? (
             <span className="badge" style={{ background: "#6366f11f", color: "#6366f1" }}>
@@ -334,18 +382,6 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
           )
         )}
       </div>
-
-      {isCalibrating && (
-        <div className="banner" style={{ background: "var(--inputBg)", borderColor: "var(--border)" }}>
-          <Icon name="pulse" size={16} style={{ color: "var(--subtext)" }} />
-          <span className="grow">
-            Learning this device's normal acoustic signature — verdicts appear once it has
-            listened across a full day and night, so it can tell a dirty filter apart from
-            ordinary day-to-night variation. Expect about 20 hours after a device is claimed,
-            moved, or recalibrated.
-          </span>
-        </div>
-      )}
 
       {awaitingFirstVerdict && (
         <div className="banner" style={{ background: "var(--inputBg)", borderColor: "var(--border)" }}>

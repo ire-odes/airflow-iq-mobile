@@ -26,33 +26,23 @@ export function ScopeProvider({ children }) {
   const [properties, setProperties] = useState([]);
   const [allDevices, setAllDevices] = useState([]);
 
-  // Deployed devices only, unless the user asks to see stock.
+  // Every device, with no deployment filter.
   //
-  // WHY THIS IS THE DEFAULT. On 2026-10-12 this account held 27 device rows
-  // and 2 installed units. The other 25 -- spares, bench rigs, unassigned
-  // stock -- each still carry whatever they last reported, so the fleet read
-  // as 27 devices with verdicts, several of them weeks stale (P1's was from
-  // 4 September). Averaging a dashboard across stock, or counting it as
-  // "offline", describes a fleet that does not exist.
+  // There WAS one here: devices.status drove a "deployed only" default with a
+  // "show spares" reveal, since this account holds 27 rows for 2 installed
+  // units and the other 25 each still carry whatever they last reported.
+  // Removed 2026-10-21 because the reveal double-listed: turning spares on
+  // put them in `devices` (so the picker's main list) while
+  // spareDevicesInScope listed them AGAIN under a NOT DEPLOYED heading, and
+  // an effect below turned the reveal on by itself whenever the remembered
+  // selection was a spare. Two entries for one device, one of them labelled
+  // "not deployed", is worse than no filter at all.
   //
-  // FAILS OPEN. A row whose status is null or undefined counts as deployed,
-  // so an environment where 20261012000000_device_status.sql has not been
-  // applied behaves exactly as before rather than showing an empty app.
-  const [showSpares, setShowSpares] = useState(() => {
-    try { return localStorage.getItem("afiq.showSpares") === "1"; } catch { return false; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("afiq.showSpares", showSpares ? "1" : "0"); } catch { /* private window */ }
-  }, [showSpares]);
-
-  const devices = useMemo(
-    () => (showSpares ? allDevices : allDevices.filter((d) => (d.status ?? "deployed") === "deployed")),
-    [allDevices, showSpares]
-  );
-  const spareCount = useMemo(
-    () => allDevices.filter((d) => (d.status ?? "deployed") !== "deployed").length,
-    [allDevices]
-  );
+  // devices.status and its migration are deliberately LEFT IN PLACE -- the
+  // column is correct (only P3 and P5-135 Shore are 'deployed'); it was the
+  // UI over it that was wrong. `allDevices` stays exported so callers that
+  // want the unfiltered set keep reading the same name.
+  const devices = allDevices;
   const [loading, setLoading] = useState(true);
   const [schemaReady, setSchemaReady] = useState(true);
 
@@ -116,18 +106,6 @@ export function ScopeProvider({ children }) {
     return devices.filter((d) => d.property_id === selectedPropertyId);
   }, [devices, selectedPropertyId]);
 
-  // Spares sitting in the current property. The device PICKER lists these
-  // even while the grid hides them: hiding a device from the one control whose
-  // job is "choose a device" is what makes it look deleted. Counts and
-  // averages still exclude them -- that is where stock would distort a number.
-  const spareDevicesInScope = useMemo(() => {
-    const isSpare = (d) => (d.status ?? "deployed") !== "deployed";
-    const spares = allDevices.filter(isSpare);
-    if (!selectedPropertyId) return spares;
-    if (selectedPropertyId === UNASSIGNED) return spares.filter((d) => !d.property_id);
-    return spares.filter((d) => d.property_id === selectedPropertyId);
-  }, [allDevices, selectedPropertyId]);
-
   // Device ids the dashboard should actually query.
   const scopedDeviceIds = useMemo(() => {
     if (selectedDeviceId) return [selectedDeviceId];
@@ -144,16 +122,8 @@ export function ScopeProvider({ children }) {
   useEffect(() => {
     if (loading || !selectedDeviceId) return;
     if (devicesInScope.some((d) => d.id === selectedDeviceId)) return;
-    // The device exists but is filtered out for being a spare: follow the
-    // user's intent and reveal stock, rather than silently moving them to a
-    // different device. This is what made the LoRaWAN units vanish when you
-    // navigated away and came back.
-    if (allDevices.some((d) => d.id === selectedDeviceId)) {
-      setShowSpares(true);
-      return;
-    }
     setSelectedDeviceId(null);
-  }, [loading, devicesInScope, allDevices, selectedDeviceId]);
+  }, [loading, devicesInScope, selectedDeviceId]);
 
   // Always resolve to one real device when at least one is in scope — never
   // leave it on the "All devices" aggregate. Charting raw readings from
@@ -207,11 +177,10 @@ export function ScopeProvider({ children }) {
     <ScopeContext.Provider
       value={{
         properties, devices, allDevices, grouped, loading, schemaReady, reload: load,
-        showSpares, setShowSpares, spareCount,
         selectedPropertyId, setSelectedPropertyId,
         selectedDeviceId, setSelectedDeviceId,
         selectedProperty, selectedDevice,
-        devicesInScope, scopedDeviceIds, spareDevicesInScope,
+        devicesInScope, scopedDeviceIds,
       }}
     >
       {children}

@@ -12,7 +12,7 @@ import { useScope } from "../context/ScopeContext";
 
 export default function ScopePicker() {
   const { devicesInScope, selectedDeviceId, setSelectedDeviceId, selectedDevice,
-          selectedProperty, spareDevicesInScope } = useScope();
+          selectedProperty } = useScope();
 
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -31,15 +31,14 @@ export default function ScopePicker() {
   // whole point of a pair is the difference between the two sides.
   const roleOf = (d) => (d.duct_role ? ` · ${d.duct_role}` : "");
 
-  const row = (d, spare) => (
+  const row = (d) => (
     <button
       key={d.id}
       className={`dropdown-item${selectedDeviceId === d.id ? " selected" : ""}`}
       onClick={() => pickDevice(d.id)}
-      title={spare ? "Not deployed. Its last reading is not a current reading." : undefined}
     >
-      <Icon name={spare ? "package" : "device"} size={15} />
-      <span className="grow truncate" style={spare ? { opacity: 0.75 } : undefined}>
+      <Icon name="device" size={15} />
+      <span className="grow truncate">
         {d.name || "Unnamed device"}
         <span className="hint" style={{ fontSize: 11, fontWeight: 600 }}>{roleOf(d)}</span>
       </span>
@@ -74,22 +73,12 @@ export default function ScopePicker() {
 
       {open && (
         <div className="dropdown-menu">
-          {devicesInScope.length === 0 && spareDevicesInScope.length === 0 ? (
+          {devicesInScope.length === 0 ? (
             <div className="hint" style={{ padding: "14px 12px" }}>
               No devices in this property yet.
             </div>
           ) : (
-            <>
-              {devicesInScope.map((d) => row(d, false))}
-              {spareDevicesInScope.length > 0 && (
-                <>
-                  <div className="field-label" style={{ padding: "9px 12px 5px" }}>
-                    NOT DEPLOYED
-                  </div>
-                  {spareDevicesInScope.map((d) => row(d, true))}
-                </>
-              )}
-            </>
+            devicesInScope.map((d) => row(d))
           )}
         </div>
       )}

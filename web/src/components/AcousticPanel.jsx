@@ -3,6 +3,7 @@ import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, 
 import Icon from "./Icon";
 import { useTheme } from "../context/ThemeContext";
 import { formatSeconds, timeAgo, formatTimestamp, durationSince } from "../lib/format";
+import { parseTs } from "../lib/metrics";
 import { getLatestRecording, getBaselineStatus, computePeaks, computeSpectrum, normalizeMfcc } from "../lib/audioRecordings";
 
 // ============================================================================
@@ -88,29 +89,80 @@ const SILENCE_GATE_FALLBACK_DB = 2.5;
 
 
 // (label, tone, explanation) for the blower tag, or null to show no tag.
-function blowerTag(medianDb, gateMode, boundaryDb) {
+//
+// The ANSWER COMES FROM THE SERVER wherever the server has one, because the
+// panel cannot always reproduce it. A device gated on spectral shape (P5,
+// mounted by a register, where no loudness threshold separates its blower
+// from a television) is decided by a rule that does not exist in this
+// chart -- which is why this badge used to read "Blower state: server" and
+// name no state at all. It does not have to: the poller stamps
+// device_baselines.last_processed_at for EVERY clip it finishes and writes a
+// filter_ml_readings row only for the ones whose gate passed, carrying the
+// clip's own timestamp. So for the clip on screen:
+//   a reading exists at this clip's time -> the gate said the blower was ON
+//   processed, and no reading            -> the gate said OFF
+// Both are the server's own verdict under whichever rule applies to that
+// device, so this reads the same way for every gate mode.
+//
+// Only when the poller has not reached the clip yet does the panel fall back
+// to measuring the spectrum itself, and then it says so.
+function blowerTag({ medianDb, gateMode, boundaryDb, clipAt, readingAt, lastProcessedAt }) {
+  const ms = (t) => (t ? parseTs(t).getTime() : null);
+  const clip = ms(clipAt);
+  const scored = ms(readingAt);
+  const processed = ms(lastProcessedAt);
+  const SLOP_MS = 1000; // same instant, written by two different statements
+
+  const how = gateMode === "shape"
+    ? "the spectral SHAPE of its airflow (a 400-1200 Hz tilt plus a 445 Hz blade tone), "
+      + "because this device is mounted where loudness cannot separate its blower "
+      + "from household noise"
+    : boundaryDb != null
+      ? `its own learned loudness boundary of ${boundaryDb.toFixed(1)} dB`
+      : `the fleet-wide fallback of ${SILENCE_GATE_FALLBACK_DB} dB, since it has not `
+        + `yet learned its own boundary`;
+  const measured = medianDb != null ? `This clip measures ${medianDb.toFixed(1)} dB. ` : "";
+
+  if (clip != null && scored != null && Math.abs(scored - clip) <= SLOP_MS) {
+    return {
+      label: "Blower on",
+      silent: false,
+      title: `${measured}The server scored this clip, which it only does once its `
+        + `blower gate has passed, so the blower was running. This device is gated on `
+        + `${how}. The clip counts toward its baseline.`,
+    };
+  }
+  if (clip != null && processed != null && processed + SLOP_MS >= clip) {
+    return {
+      label: "Blower off",
+      silent: true,
+      title: `${measured}The server has processed this clip and wrote no verdict for `
+        + `it, so its blower gate judged the blower to be off (or the clip was too `
+        + `short to judge). This device is gated on ${how}. Skipped clips get no `
+        + `verdict and no baseline sample.`,
+    };
+  }
   if (medianDb == null) return null;
+
+  // Not scored yet -- the panel's own measurement, labelled as provisional.
   if (gateMode === "shape") {
     return {
-      label: "Blower state: server",
+      label: "Not scored yet",
       silent: null,
-      title: `Median ${medianDb.toFixed(1)} dB. This device's blower is identified `
-        + `by the spectral SHAPE of its airflow, not by loudness, because it is `
-        + `mounted where a level test cannot separate the blower from ordinary `
-        + `household noise. That rule runs server-side and cannot be reproduced `
-        + `from this chart, so no on/off claim is made here.`,
+      title: `${measured}The server has not finished with this clip. Its blower is `
+        + `identified by ${how}, a rule this chart cannot reproduce, so no on/off `
+        + `claim is made here until the verdict lands.`,
     };
   }
   if (boundaryDb != null) {
     const silent = medianDb <= boundaryDb;
     return {
-      label: silent ? "Silent" : "Blower on",
+      label: silent ? "Silent?" : "Blower on?",
       silent,
       title: `Median ${medianDb.toFixed(1)} dB against this device's own learned `
-        + `boundary of ${boundaryDb.toFixed(1)} dB. `
-        + (silent
-          ? "The blower was off, so this clip was skipped -- no verdict and no baseline sample."
-          : "The blower was running, so this clip counts toward the baseline."),
+        + `boundary of ${boundaryDb.toFixed(1)} dB, measured here in the browser -- `
+        + `the server has not finished with this clip yet, so this is the panel's `
+        + `own reading of it and not the verdict.`,
     };
   }
   const silent = medianDb <= SILENCE_GATE_FALLBACK_DB;
@@ -159,6 +211,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
   // The server's own blower rule for this device -- never inferred here.
   const [gateMode, setGateMode] = useState("median");
   const [gateBoundaryDb, setGateBoundaryDb] = useState(null);
+  const [lastProcessedAt, setLastProcessedAt] = useState(null);
   const [duration, setDuration] = useState(0);
   const [audioLoading, setAudioLoading] = useState(false);
   const [audioError, setAudioError] = useState(null);
@@ -194,6 +247,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
     setBaselineState(null);
     setGateMode("median");
     setGateBoundaryDb(null);
+    setLastProcessedAt(null);
     (async () => {
       if (!deviceMac) { if (!cancelled) setRecording(null); return; }
       try {
@@ -207,6 +261,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
           setBaselineState(baseline?.state ?? null);
           setGateMode(baseline?.gateMode ?? "median");
           setGateBoundaryDb(baseline?.gateBoundaryDb ?? null);
+          setLastProcessedAt(baseline?.lastProcessedAt ?? null);
         }
       } catch (e) {
         if (!cancelled) { setLoadError(e.message || "Couldn't load recording"); setRecording(null); }
@@ -355,8 +410,15 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
   // Full 72-bin median, not isolatedSpectrum -- see the gate note above.
   const gateMedianDb = useMemo(() => (spectrum.length ? medianDb(spectrum) : null), [spectrum]);
   const tag = useMemo(
-    () => blowerTag(gateMedianDb, gateMode, gateBoundaryDb),
-    [gateMedianDb, gateMode, gateBoundaryDb]
+    () => blowerTag({
+      medianDb: gateMedianDb,
+      gateMode,
+      boundaryDb: gateBoundaryDb,
+      clipAt: recording?.updatedAt,
+      readingAt: recording?.classification?.recorded_at,
+      lastProcessedAt,
+    }),
+    [gateMedianDb, gateMode, gateBoundaryDb, recording, lastProcessedAt]
   );
 
   const classification = recording?.classification || null;

@@ -111,7 +111,7 @@ export async function getBaselineStatus(deviceMac) {
   if (!deviceMac) return null;
   const { data, error } = await supabase
     .from("device_baselines")
-    .select("baseline_spectrum_db, spectrum_n, state, n_warmup_samples, gate_mode, gate_boundary_db")
+    .select("baseline_spectrum_db, spectrum_n, state, n_warmup_samples, gate_mode, gate_boundary_db, last_processed_at")
     .eq("device_mac", deviceMac)
     .maybeSingle();
   if (error || !data) return null;
@@ -124,6 +124,16 @@ export async function getBaselineStatus(deviceMac) {
     // migration for why the panel must not substitute its own rule.
     gateMode: data.gate_mode || "median",
     gateBoundaryDb: data.gate_boundary_db ?? null,
+    // The newest clip the poller has finished with, stamped whatever it
+    // decided. Paired with the latest reading's recorded_at it answers "what
+    // did the server make of the clip on screen?", which is the only way the
+    // panel can state a blower verdict for a device gated on spectral shape:
+    //   processed, and a reading exists at that exact time -> gate said ON
+    //   processed, no reading at that time                 -> gate said OFF
+    // (a scored reading carries the clip's own updated_at as its recorded_at
+    // -- see the save in ML/service/poll_and_infer.py -- so the two line up
+    // exactly, and a clip the gate rejected gets this stamp and no row.)
+    lastProcessedAt: data.last_processed_at ?? null,
     spectrum: data.baseline_spectrum_db
       ? { db: data.baseline_spectrum_db, n: data.spectrum_n }
       : null,

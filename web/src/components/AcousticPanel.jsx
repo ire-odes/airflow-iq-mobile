@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import Icon from "./Icon";
 import { useTheme } from "../context/ThemeContext";
-import { formatSeconds, timeAgo, formatTimestamp } from "../lib/format";
+import { formatSeconds, timeAgo, formatTimestamp, durationSince } from "../lib/format";
 import { getLatestRecording, getBaselineStatus, computePeaks, computeSpectrum, normalizeMfcc } from "../lib/audioRecordings";
 
 // ============================================================================
@@ -23,39 +23,106 @@ import { getLatestRecording, getBaselineStatus, computePeaks, computeSpectrum, n
 const WAVE_BINS = 190;
 const TRIM_LEADING_SECONDS = 0.05; // drop the mic-startup click at the very start of the clip
 
-// The spectrum chart is deliberately cropped to this range, not the full
-// 20 Hz-8 kHz computeSpectrum() produces. Real evidence, not a guess:
+// The spectrum chart is cropped to this range, not the full 20 Hz-8 kHz
+// computeSpectrum() produces. The lower half of the range is still where the
+// clean-vs-dirty evidence lives:
 //   - low_freq_energy_ratio (one of the 5 features the drift baseline is
 //     actually built on) is defined as exactly the 20-500 Hz energy
 //     fraction (ML/extract_features_v2.py)
 //   - the classifier's 3 highest-importance features of all 128 are the
 //     lowest-index FFT bands, landing at ~70-230 Hz
 //   - the lab clean-vs-dirty frequency study found its largest effect
-//     sizes (Cohen's d) clustered at 46-358 Hz, dwarfing a much smaller
-//     secondary cluster around 900-1000 Hz that isn't included here to
-//     keep this a single clean range rather than two clusters with a gap
-// With computeSpectrum's log-spaced binning, ~39 of its 72 bins already
-// fall in this range -- plenty dense for a bar view, no resolution change
-// needed upstream.
-const ISOLATED_BAND_MAX_HZ = 500;
+//     sizes (Cohen's d) clustered at 46-358 Hz
+//
+// This was 500 Hz until 2026-10-06, chosen to keep one clean range and skip
+// the lab study's smaller secondary cluster at 900-1000 Hz. Kannan House (P5)
+// showed why that crop was too tight: a device mounted near a register hears
+// AIRFLOW rather than motor rumble, and its blower-on signature is a hump at
+// 500 Hz-2 kHz plus a narrow blade-pass tone at ~445 Hz -- +12.8 dB in the
+// 500 Hz-1 kHz octave against ~0 dB below 60 Hz. At a 500 Hz crop that device's
+// entire signature sat off the right edge of this chart. Abraham House (P3),
+// mounted against the air handler, is the opposite: +24 dB below 60 Hz.
+// 2 kHz covers both mountings and the secondary lab cluster, in one range.
+//
+// With computeSpectrum's log-spaced binning ~55 of its 72 bins fall in here,
+// so it stays a dense bar view with no resolution change needed upstream.
+const ISOLATED_BAND_MAX_HZ = 2000;
+
+// Label for the crop, derived so the heading can't drift from the constant.
+const ISOLATED_BAND_LABEL = `20–${
+  ISOLATED_BAND_MAX_HZ >= 1000
+    ? `${(ISOLATED_BAND_MAX_HZ / 1000).toFixed(ISOLATED_BAND_MAX_HZ % 1000 ? 1 : 0)} kHz`
+    : `${ISOLATED_BAND_MAX_HZ} Hz`
+}`;
 
 // Silence gate -- the same decision the ML pipeline makes before a clip is
-// allowed to reach a device's baseline (SPECTRAL_GATE_MIN_MEDIAN_DB in
-// ML/service/poll_and_infer.py). A clip at or below this median is treated as
-// "the blower wasn't running" and produces no reading at all, which is why the
-// panel can show a fresh recording while the baseline's reading count sits
-// still. This tag is what explains that gap to the user.
+// allowed to reach a device's baseline. A gated clip produces no reading at
+// all, which is why this panel can show a fresh recording while the
+// baseline's count sits still. This tag is what explains that gap.
 //
 // The median is taken across ALL 72 bins computeSpectrum() returns, not the
-// 20-500 Hz slice the chart draws, because that is what the pipeline does.
-// Measured separation is wide: blower-on clips sit at +3.7..+7.5 dB, silent
-// ones at -26..-44 dB.
+// ISOLATED_BAND_MAX_HZ slice the chart draws, because that is what the
+// pipeline does.
+//
+// WHICH CUT APPLIES IS PER DEVICE, AND THE SERVER DECIDES IT.
+// This used to be one fleet-wide constant, 2.5 dB, measured on the lab rig.
+// It is wrong for houses by about 20 dB: P5's clips sit at -20..-35 dB, so
+// every single one rendered "Silent" here while the pipeline scored the same
+// audio as blower-on. That is the identical error that discarded 82 of P3's
+// consecutive wakes. device_baselines.gate_mode / .gate_boundary_db now carry
+// the server's own rule (20261012010000_gate_mode.sql) and this panel defers
+// to them:
+//
+//   gate_mode 'median' + a learned boundary -> compare against that boundary
+//   gate_mode 'median', no boundary yet     -> the fleet fallback below,
+//                                              labelled as provisional
+//   gate_mode 'shape'                       -> SAY NOTHING. That rule needs
+//     the clip's spectral shape (ML/blower_signature.py), which cannot be
+//     recovered from the 72 bins a browser holds. Substituting a level test
+//     is exactly the bug this replaces.
 //
 // One caveat, stated rather than hidden: the browser trims
 // TRIM_LEADING_SECONDS off the front before analysing and the Python side
-// does not, so the two can differ by a fraction of a dB. Against a 30 dB gap
-// that never changes the verdict.
-const SILENCE_GATE_MEDIAN_DB = 2.5;
+// does not, so the two can differ by a fraction of a dB.
+const SILENCE_GATE_FALLBACK_DB = 2.5;
+
+
+// (label, tone, explanation) for the blower tag, or null to show no tag.
+function blowerTag(medianDb, gateMode, boundaryDb) {
+  if (medianDb == null) return null;
+  if (gateMode === "shape") {
+    return {
+      label: "Blower state: server",
+      silent: null,
+      title: `Median ${medianDb.toFixed(1)} dB. This device's blower is identified `
+        + `by the spectral SHAPE of its airflow, not by loudness, because it is `
+        + `mounted where a level test cannot separate the blower from ordinary `
+        + `household noise. That rule runs server-side and cannot be reproduced `
+        + `from this chart, so no on/off claim is made here.`,
+    };
+  }
+  if (boundaryDb != null) {
+    const silent = medianDb <= boundaryDb;
+    return {
+      label: silent ? "Silent" : "Blower on",
+      silent,
+      title: `Median ${medianDb.toFixed(1)} dB against this device's own learned `
+        + `boundary of ${boundaryDb.toFixed(1)} dB. `
+        + (silent
+          ? "The blower was off, so this clip was skipped -- no verdict and no baseline sample."
+          : "The blower was running, so this clip counts toward the baseline."),
+    };
+  }
+  const silent = medianDb <= SILENCE_GATE_FALLBACK_DB;
+  return {
+    label: silent ? "Silent?" : "Blower on?",
+    silent,
+    title: `Median ${medianDb.toFixed(1)} dB against the fleet-wide fallback of `
+      + `${SILENCE_GATE_FALLBACK_DB} dB. This device has not yet learned its own `
+      + `boundary, and the fallback was measured on the lab rig -- it reads about `
+      + `20 dB high for a device in a house, so treat this as provisional.`,
+  };
+}
 
 // numpy-compatible median: an even-length array averages the two middle
 // values, so this matches np.median() over the same 72 bins.
@@ -89,6 +156,9 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
   const [spectrum, setSpectrum] = useState([]);
   const [baselineSpectrum, setBaselineSpectrum] = useState(null); // null = none accumulated yet
   const [baselineState, setBaselineState] = useState(null);       // "cold_start" | "warming" | "warm"
+  // The server's own blower rule for this device -- never inferred here.
+  const [gateMode, setGateMode] = useState("median");
+  const [gateBoundaryDb, setGateBoundaryDb] = useState(null);
   const [duration, setDuration] = useState(0);
   const [audioLoading, setAudioLoading] = useState(false);
   const [audioError, setAudioError] = useState(null);
@@ -122,6 +192,8 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
     setLoadError(null);
     setBaselineSpectrum(null);
     setBaselineState(null);
+    setGateMode("median");
+    setGateBoundaryDb(null);
     (async () => {
       if (!deviceMac) { if (!cancelled) setRecording(null); return; }
       try {
@@ -133,6 +205,8 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
           setRecording(rec);
           setBaselineSpectrum(baseline?.spectrum ?? null);
           setBaselineState(baseline?.state ?? null);
+          setGateMode(baseline?.gateMode ?? "median");
+          setGateBoundaryDb(baseline?.gateBoundaryDb ?? null);
         }
       } catch (e) {
         if (!cancelled) { setLoadError(e.message || "Couldn't load recording"); setRecording(null); }
@@ -278,9 +352,12 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
     [spectrum, baselineSpectrum]
   );
 
-  // Full 72-bin median, not isolatedSpectrum -- see SILENCE_GATE_MEDIAN_DB.
+  // Full 72-bin median, not isolatedSpectrum -- see the gate note above.
   const gateMedianDb = useMemo(() => (spectrum.length ? medianDb(spectrum) : null), [spectrum]);
-  const isSilentClip = gateMedianDb != null && gateMedianDb <= SILENCE_GATE_MEDIAN_DB;
+  const tag = useMemo(
+    () => blowerTag(gateMedianDb, gateMode, gateBoundaryDb),
+    [gateMedianDb, gateMode, gateBoundaryDb]
+  );
 
   const classification = recording?.classification || null;
   // "calibrating" means the device hasn't finished its acoustic warmup --
@@ -323,6 +400,14 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
   const confidencePct = classification?.classifier_confidence != null
     ? Math.round(classification.classifier_confidence * 100)
     : null;
+  // When the verdict on display landed -- the first reading of its current
+  // run (see getDecisionRunStart in lib/audioRecordings.js), i.e. the moment
+  // this device crossed over and the site began showing this verdict. Only
+  // shown for a real verdict: during calibration there is nothing to date.
+  const verdictSince = (!isCalibrating && !awaitingFirstVerdict && classification?.decision_since)
+    ? classification.decision_since
+    : null;
+  const verdictHeld = verdictSince ? durationSince(verdictSince) : null;
   const hasDisagreement = !isCalibrating && !!classification?.disagreement_flag
     && !["none", "false", "no"].includes(String(classification.disagreement_flag).toLowerCase());
 
@@ -337,20 +422,16 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
             {recording?.updatedAt ? `Recorded ${timeAgo(recording.updatedAt)}` : "No device selected"}
           </p>
         </div>
-        {recording?.kind === "audio" && gateMedianDb != null && (
+        {recording?.kind === "audio" && tag && (
           <span
             className="badge"
-            style={isSilentClip
+            style={tag.silent === true
               ? { background: "#f59e0b1f", color: "#f59e0b" }
               : { background: "var(--inputBg)", color: "var(--subtext)" }}
-            title={`Silence gate: median ${gateMedianDb.toFixed(1)} dB across all 72 bins, `
-              + `cut at ${SILENCE_GATE_MEDIAN_DB} dB. `
-              + (isSilentClip
-                ? "The blower was off, so this clip was skipped -- no verdict and no baseline sample."
-                : "The blower was running, so this clip counts toward the baseline.")}
+            title={tag.title}
           >
-            <Icon name={isSilentClip ? "warning" : "waveform"} size={11} />
-            {isSilentClip ? "Silent" : "Blower on"}
+            <Icon name={tag.silent === true ? "warning" : "waveform"} size={11} />
+            {tag.label}
           </span>
         )}
 
@@ -369,6 +450,7 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
               style={{ background: isDirty ? "#ef44441f" : "#22c55e1f", color: isDirty ? "#ef4444" : "#22c55e" }}
               title={
                 `${classification.classifier_label} · clf ${confidencePct}% dirty · ${timeAgo(classification.recorded_at)}`
+                + (verdictSince ? ` · since ${formatTimestamp(verdictSince)}` : "")
                 + (hasDisagreement ? ` · flagged: ${classification.disagreement_flag}` : "")
               }
             >
@@ -382,6 +464,26 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
           )
         )}
       </div>
+
+      {verdictSince && (
+        <div
+          className="banner"
+          style={isDirty
+            ? { background: "#ef44440f", borderColor: "#ef444438" }
+            : { background: "var(--inputBg)", borderColor: "var(--border)" }}
+        >
+          <Icon
+            name={isDirty ? "warning" : "success"}
+            size={16}
+            style={{ color: isDirty ? "#ef4444" : "var(--subtext)" }}
+          />
+          <span className="grow">
+            Read as <strong>{isDirty ? "dirty" : "clean"}</strong> since{" "}
+            {formatTimestamp(verdictSince)}
+            {verdictHeld ? ` — ${verdictHeld}` : ""}
+          </span>
+        </div>
+      )}
 
       {awaitingFirstVerdict && (
         <div className="banner" style={{ background: "var(--inputBg)", borderColor: "var(--border)" }}>
@@ -502,9 +604,9 @@ export default function AcousticPanel({ deviceMac, deviceName }) {
                   <div className="row" style={{ marginBottom: 8 }}>
                     <div
                       className="field-label grow"
-                      title="Cropped to 20-500 Hz on purpose: this is where the classifier's top features, the strongest lab clean-vs-dirty effect sizes, and low_freq_energy_ratio (one of the 5 features the drift baseline is built on) all concentrate -- see ISOLATED_BAND_MAX_HZ in this file."
+                      title="Cropped on purpose: the classifier's top features, the strongest lab clean-vs-dirty effect sizes, and low_freq_energy_ratio all concentrate below 500 Hz, while a blower heard through a register (rather than against the air handler) shows up between 500 Hz and 2 kHz. The range covers both -- see ISOLATED_BAND_MAX_HZ in this file."
                     >
-                      FREQUENCY SPECTRUM · 20–500 Hz
+                      FREQUENCY SPECTRUM · {ISOLATED_BAND_LABEL}
                     </div>
                     {baselineSpectrum ? (
                       <div className="row" style={{ gap: 12 }}>

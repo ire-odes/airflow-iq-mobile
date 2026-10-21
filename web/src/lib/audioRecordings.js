@@ -22,6 +22,53 @@ import { supabase } from "./supabase";
 
 const SIGNED_URL_TTL_SECONDS = 600;
 
+// When did the verdict currently on display actually land?
+//
+// The badge says "Filter Dirty" but not since when, and that is the first
+// question it raises: a verdict that flipped an hour ago and one that has
+// stood for five days say different things about the filter. This returns the
+// first reading of the CURRENT unbroken run of the latest decision -- the
+// reading where this device crossed its threshold and the site started
+// showing this verdict -- not the first time it ever showed it.
+//
+// Two bounded queries rather than paging the history, which is long (P5 alone
+// has >10,000 scored readings):
+//   1. the newest reading whose decision DIFFERS -- the last reading before
+//      the run began;
+//   2. the oldest reading after that one -- the run's first reading.
+// With no differing row at all, this decision has stood since the device's
+// first scored reading, so the run starts there and query 2 runs unbounded.
+//
+// "calibrating" counts as a decision like any other here, so a device that
+// went dirty, went quiet long enough to be recalibrated, and came back dirty
+// reports the later crossing -- which is the one the site has been showing.
+async function getDecisionRunStart(deviceMac, decision) {
+  if (!deviceMac || !decision) return null;
+
+  const { data: prev, error: prevErr } = await supabase
+    .from("filter_ml_readings")
+    .select("recorded_at")
+    .eq("device_mac", deviceMac)
+    .neq("decision", decision)
+    .order("recorded_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (prevErr) return null;
+
+  let query = supabase
+    .from("filter_ml_readings")
+    .select("recorded_at")
+    .eq("device_mac", deviceMac)
+    .eq("decision", decision)
+    .order("recorded_at", { ascending: true })
+    .limit(1);
+  if (prev?.recorded_at) query = query.gt("recorded_at", prev.recorded_at);
+
+  const { data: first, error: firstErr } = await query.maybeSingle();
+  if (firstErr || !first) return null;
+  return first.recorded_at;
+}
+
 async function getLatestClassification(deviceMac) {
   const { data, error } = await supabase
     .from("filter_ml_readings")
@@ -31,7 +78,12 @@ async function getLatestClassification(deviceMac) {
     .limit(1)
     .maybeSingle();
   if (error || !data) return null;
-  return data;
+  // decision_since: when this verdict first appeared, i.e. the start of the
+  // run it belongs to. Null if it can't be established -- the panel then
+  // simply omits the line rather than dating the verdict to the last reading,
+  // which would read as "it just happened" for a verdict days old.
+  const decisionSince = await getDecisionRunStart(deviceMac, data.decision);
+  return { ...data, decision_since: decisionSince };
 }
 
 // Baseline frequency spectrum -- a running average (dB, same 72 log-spaced
@@ -59,13 +111,19 @@ export async function getBaselineStatus(deviceMac) {
   if (!deviceMac) return null;
   const { data, error } = await supabase
     .from("device_baselines")
-    .select("baseline_spectrum_db, spectrum_n, state, n_warmup_samples")
+    .select("baseline_spectrum_db, spectrum_n, state, n_warmup_samples, gate_mode, gate_boundary_db")
     .eq("device_mac", deviceMac)
     .maybeSingle();
   if (error || !data) return null;
   return {
     state: data.state || "cold_start",
     samples: data.n_warmup_samples ?? 0,
+    // How this device's blower gate decides, and the boundary it learned.
+    // Both come from ML/service/poll_and_infer.py, which is the only thing
+    // entitled to an opinion on it -- see the 20261012010000_gate_mode
+    // migration for why the panel must not substitute its own rule.
+    gateMode: data.gate_mode || "median",
+    gateBoundaryDb: data.gate_boundary_db ?? null,
     spectrum: data.baseline_spectrum_db
       ? { db: data.baseline_spectrum_db, n: data.spectrum_n }
       : null,

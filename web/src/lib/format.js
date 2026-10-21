@@ -20,6 +20,23 @@ export function timeAgo(ts) {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
+// How long a state has stood, as a standalone phrase: "5 days", "19 hours".
+// Separate from timeAgo() on purpose -- that is terse ("5d ago") because it
+// sits in dense rows, while this sits next to an explicit date, where "5d"
+// reads as noise and the point is the span itself.
+export function durationSince(ts) {
+  if (!ts) return null;
+  const d = parseTs(ts);
+  if (isNaN(d.getTime())) return null;
+  const mins = Math.floor((Date.now() - d.getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"}`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 48) return `${hrs} hour${hrs === 1 ? "" : "s"}`;
+  const days = Math.floor(hrs / 24);
+  return `${days} day${days === 1 ? "" : "s"}`;
+}
+
 export function getTimeOfDay() {
   const h = new Date().getHours();
   if (h < 12) return "Morning";

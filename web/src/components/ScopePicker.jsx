@@ -11,7 +11,8 @@ import { useScope } from "../context/ScopeContext";
 // ============================================================================
 
 export default function ScopePicker() {
-  const { devicesInScope, selectedDeviceId, setSelectedDeviceId, selectedDevice, selectedProperty } = useScope();
+  const { devicesInScope, selectedDeviceId, setSelectedDeviceId, selectedDevice,
+          selectedProperty, spareDevicesInScope } = useScope();
 
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -25,9 +26,31 @@ export default function ScopePicker() {
   // selectedDevice should always be set once at least one device is in
   // scope (ScopeContext auto-selects the first) — this fallback only shows
   // for the brief instant before that resolves, or a genuinely empty scope.
+  // A paired node is useless to identify without its duct role: "P9" and "P4"
+  // say nothing about which side of the filter you are looking at, and the
+  // whole point of a pair is the difference between the two sides.
+  const roleOf = (d) => (d.duct_role ? ` · ${d.duct_role}` : "");
+
+  const row = (d, spare) => (
+    <button
+      key={d.id}
+      className={`dropdown-item${selectedDeviceId === d.id ? " selected" : ""}`}
+      onClick={() => pickDevice(d.id)}
+      title={spare ? "Not deployed. Its last reading is not a current reading." : undefined}
+    >
+      <Icon name={spare ? "package" : "device"} size={15} />
+      <span className="grow truncate" style={spare ? { opacity: 0.75 } : undefined}>
+        {d.name || "Unnamed device"}
+        <span className="hint" style={{ fontSize: 11, fontWeight: 600 }}>{roleOf(d)}</span>
+      </span>
+      {selectedDeviceId === d.id && <Icon name="check" size={15} />}
+    </button>
+  );
+
   const label = selectedDevice ? (selectedDevice.name || "Device") : "No device";
   const sublabel = selectedDevice
-    ? (selectedDevice.hvac_location || selectedDevice.device_mac || "Single device")
+    ? [selectedDevice.duct_role ? `${selectedDevice.duct_role} side` : null,
+       selectedDevice.hvac_location || selectedDevice.device_mac].filter(Boolean).join(" · ")
     : selectedProperty ? `No devices in ${selectedProperty.name}` : "No devices";
 
   return (
@@ -51,22 +74,22 @@ export default function ScopePicker() {
 
       {open && (
         <div className="dropdown-menu">
-          {devicesInScope.length === 0 ? (
+          {devicesInScope.length === 0 && spareDevicesInScope.length === 0 ? (
             <div className="hint" style={{ padding: "14px 12px" }}>
               No devices in this property yet.
             </div>
           ) : (
-            devicesInScope.map((d) => (
-              <button
-                key={d.id}
-                className={`dropdown-item${selectedDeviceId === d.id ? " selected" : ""}`}
-                onClick={() => pickDevice(d.id)}
-              >
-                <Icon name="device" size={15} />
-                <span className="grow truncate">{d.name || "Unnamed device"}</span>
-                {selectedDeviceId === d.id && <Icon name="check" size={15} />}
-              </button>
-            ))
+            <>
+              {devicesInScope.map((d) => row(d, false))}
+              {spareDevicesInScope.length > 0 && (
+                <>
+                  <div className="field-label" style={{ padding: "9px 12px 5px" }}>
+                    NOT DEPLOYED
+                  </div>
+                  {spareDevicesInScope.map((d) => row(d, true))}
+                </>
+              )}
+            </>
           )}
         </div>
       )}

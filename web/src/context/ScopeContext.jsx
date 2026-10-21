@@ -24,13 +24,55 @@ export function ScopeProvider({ children }) {
   const userId = session?.user?.id;
 
   const [properties, setProperties] = useState([]);
-  const [devices, setDevices] = useState([]);
+  const [allDevices, setAllDevices] = useState([]);
+
+  // Deployed devices only, unless the user asks to see stock.
+  //
+  // WHY THIS IS THE DEFAULT. On 2026-10-12 this account held 27 device rows
+  // and 2 installed units. The other 25 -- spares, bench rigs, unassigned
+  // stock -- each still carry whatever they last reported, so the fleet read
+  // as 27 devices with verdicts, several of them weeks stale (P1's was from
+  // 4 September). Averaging a dashboard across stock, or counting it as
+  // "offline", describes a fleet that does not exist.
+  //
+  // FAILS OPEN. A row whose status is null or undefined counts as deployed,
+  // so an environment where 20261012000000_device_status.sql has not been
+  // applied behaves exactly as before rather than showing an empty app.
+  const [showSpares, setShowSpares] = useState(() => {
+    try { return localStorage.getItem("afiq.showSpares") === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("afiq.showSpares", showSpares ? "1" : "0"); } catch { /* private window */ }
+  }, [showSpares]);
+
+  const devices = useMemo(
+    () => (showSpares ? allDevices : allDevices.filter((d) => (d.status ?? "deployed") === "deployed")),
+    [allDevices, showSpares]
+  );
+  const spareCount = useMemo(
+    () => allDevices.filter((d) => (d.status ?? "deployed") !== "deployed").length,
+    [allDevices]
+  );
   const [loading, setLoading] = useState(true);
   const [schemaReady, setSchemaReady] = useState(true);
 
   // null = "All properties" / "All devices"
   const [selectedPropertyId, setSelectedPropertyId] = useState(null);
-  const [selectedDeviceId, setSelectedDeviceId] = useState(null);
+
+  // Remembered across navigation. Without this the effect below re-resolves an
+  // empty selection to devicesInScope[0] -- and devices load newest-created
+  // first -- so leaving a device and coming back silently landed you on a
+  // DIFFERENT one. That reads as "my readings disappeared" when in fact you
+  // are looking at another device's (often empty) history.
+  const [selectedDeviceId, setSelectedDeviceId] = useState(() => {
+    try { return localStorage.getItem("afiq.selectedDeviceId") || null; } catch { return null; }
+  });
+  useEffect(() => {
+    try {
+      if (selectedDeviceId) localStorage.setItem("afiq.selectedDeviceId", selectedDeviceId);
+      else localStorage.removeItem("afiq.selectedDeviceId");
+    } catch { /* private window */ }
+  }, [selectedDeviceId]);
 
   // No owner_id filtering here — RLS alone decides what comes back, which is
   // what lets a property-level technician grant (property_technician_assignments)
@@ -57,7 +99,7 @@ export function ScopeProvider({ children }) {
     // the "claim by MAC" flow can find them, but they don't belong in anyone's
     // portfolio — without this filter every unclaimed device in the system
     // shows up here tagged as if it were a technician assignment.
-    setDevices(
+    setAllDevices(
       (devRes.data || [])
         .filter((d) => d.owner_id != null)
         .map((d) => ({ ...d, _isOwner: d.owner_id === userId }))
@@ -74,6 +116,18 @@ export function ScopeProvider({ children }) {
     return devices.filter((d) => d.property_id === selectedPropertyId);
   }, [devices, selectedPropertyId]);
 
+  // Spares sitting in the current property. The device PICKER lists these
+  // even while the grid hides them: hiding a device from the one control whose
+  // job is "choose a device" is what makes it look deleted. Counts and
+  // averages still exclude them -- that is where stock would distort a number.
+  const spareDevicesInScope = useMemo(() => {
+    const isSpare = (d) => (d.status ?? "deployed") !== "deployed";
+    const spares = allDevices.filter(isSpare);
+    if (!selectedPropertyId) return spares;
+    if (selectedPropertyId === UNASSIGNED) return spares.filter((d) => !d.property_id);
+    return spares.filter((d) => d.property_id === selectedPropertyId);
+  }, [allDevices, selectedPropertyId]);
+
   // Device ids the dashboard should actually query.
   const scopedDeviceIds = useMemo(() => {
     if (selectedDeviceId) return [selectedDeviceId];
@@ -81,11 +135,25 @@ export function ScopeProvider({ children }) {
   }, [selectedDeviceId, devicesInScope]);
 
   // Drop a stale device selection when the property filter changes under it.
+  //
+  // GUARDED ON `loading`. A remembered selection is restored from
+  // localStorage before the device list has been fetched, so without this
+  // guard devicesInScope is still [] on the first pass and the selection is
+  // wiped every single load -- which is exactly the "it forgets which device
+  // I was on" behaviour the persistence is meant to fix.
   useEffect(() => {
-    if (selectedDeviceId && !devicesInScope.some((d) => d.id === selectedDeviceId)) {
-      setSelectedDeviceId(null);
+    if (loading || !selectedDeviceId) return;
+    if (devicesInScope.some((d) => d.id === selectedDeviceId)) return;
+    // The device exists but is filtered out for being a spare: follow the
+    // user's intent and reveal stock, rather than silently moving them to a
+    // different device. This is what made the LoRaWAN units vanish when you
+    // navigated away and came back.
+    if (allDevices.some((d) => d.id === selectedDeviceId)) {
+      setShowSpares(true);
+      return;
     }
-  }, [devicesInScope, selectedDeviceId]);
+    setSelectedDeviceId(null);
+  }, [loading, devicesInScope, allDevices, selectedDeviceId]);
 
   // Always resolve to one real device when at least one is in scope — never
   // leave it on the "All devices" aggregate. Charting raw readings from
@@ -94,10 +162,11 @@ export function ScopeProvider({ children }) {
   // legitimate case for showing it; the picker only ever narrows further
   // from here.
   useEffect(() => {
+    if (loading) return;
     if (!selectedDeviceId && devicesInScope.length >= 1) {
       setSelectedDeviceId(devicesInScope[0].id);
     }
-  }, [devicesInScope, selectedDeviceId]);
+  }, [loading, devicesInScope, selectedDeviceId]);
 
   // Devices grouped by property, for list rendering. Always includes an
   // "Unassigned" group when there are devices without a property — split by
@@ -137,11 +206,12 @@ export function ScopeProvider({ children }) {
   return (
     <ScopeContext.Provider
       value={{
-        properties, devices, grouped, loading, schemaReady, reload: load,
+        properties, devices, allDevices, grouped, loading, schemaReady, reload: load,
+        showSpares, setShowSpares, spareCount,
         selectedPropertyId, setSelectedPropertyId,
         selectedDeviceId, setSelectedDeviceId,
         selectedProperty, selectedDevice,
-        devicesInScope, scopedDeviceIds,
+        devicesInScope, scopedDeviceIds, spareDevicesInScope,
       }}
     >
       {children}

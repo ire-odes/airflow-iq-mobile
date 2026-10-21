@@ -41,15 +41,20 @@ function ChartTooltip({ active, payload, label, unit, compareLabel }) {
 // `compareValue` -- used to chart a paired LoRaWAN device's other half
 // alongside this one. Absent, the chart behaves exactly as before.
 export default function TrendChart({ data, metric, isLine, height = 300, onBarClick,
-                                     compareLabel, primaryLabel }) {
+                                     compareLabel, primaryLabel,
+                                     emptyTitle, emptyHint }) {
   const { theme } = useTheme();
 
   if (!data.length) {
     return (
       <div className="empty" style={{ height }}>
         <div className="empty-icon"><span style={{ fontSize: 22 }}>📊</span></div>
-        <div style={{ fontWeight: 700, color: "var(--text)" }}>No data for this period</div>
-        <div className="hint">Try a wider range, or step back with the arrows above.</div>
+        <div style={{ fontWeight: 700, color: "var(--text)" }}>
+          {emptyTitle || "No data for this period"}
+        </div>
+        <div className="hint">
+          {emptyHint || "Try a wider range, or step back with the arrows above."}
+        </div>
       </div>
     );
   }

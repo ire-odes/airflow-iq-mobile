@@ -31,6 +31,12 @@ export default function Dashboard() {
   const [metric, setMetric] = useState(METRICS[0]);
 
   const [chartData, setChartData] = useState([]);
+  // null = not checked yet. "No data in this period" and "this device has
+  // never reported at all" are different problems, and the second one is not
+  // fixed by widening the range -- P4 and P9 (LoRaWAN) have zero sensor_logs
+  // rows ever, so every range looked identical while the chart kept telling
+  // the user to try a wider one.
+  const [everReported, setEverReported] = useState(null);
   const [chartStats, setChartStats] = useState({ min: null, max: null, lastTs: null });
   const [metricStats, setMetricStats] = useState({});
   const [latestReadings, setLatestReadings] = useState({});
@@ -70,7 +76,16 @@ export default function Dashboard() {
   const isLine = range.hours === 24;
   const deviceKey = scopedDeviceIds.join(",");
 
-  useEffect(() => { if (!pairPartner) setComparePair(false); }, [pairPartner]);
+  // A pair is ONE installation measured either side of the filter -- the
+  // signal is the difference between the two series, so showing one half
+  // alone is showing half a measurement. Default the overlay on whenever a
+  // partner exists; the toggle below the chart still turns it off.
+  //
+  // Keyed on the partner's id, not the object: pairPartner is a useMemo over
+  // `devices`, so its reference changes on every scope reload and an
+  // object-keyed effect would silently re-enable the overlay each time,
+  // overriding the user's choice minutes after they made it.
+  useEffect(() => { setComparePair(!!pairPartner); }, [pairPartner?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const window_ = useCallback(() => {
     const rangeMs = range.hours * 3600000;
@@ -82,11 +97,24 @@ export default function Dashboard() {
   const fetchChart = useCallback(async () => {
     if (!scopedDeviceIds.length) {
       setChartData([]); setChartStats({ min: null, max: null, lastTs: null });
+      setEverReported(null);
       setLoading(false);
       return;
     }
 
     setLoading(true); setError(null);
+    setEverReported(null);
+
+    // Cheap existence probe, run only when a range comes back empty: one row,
+    // no time bound. Separates "quiet lately" from "never reported".
+    const probeEverReported = async () => {
+      const { data: anyRow } = await supabase
+        .from("sensor_logs")
+        .select("recorded_at")
+        .in("device_id", scopedDeviceIds)
+        .limit(1);
+      setEverReported(!!anyRow?.length);
+    };
     const { start, end } = window_();
     let points = [];
 
@@ -111,6 +139,7 @@ export default function Dashboard() {
         if (error) throw error;
         if (!data?.length) {
           setChartData([]); setChartStats({ min: null, max: null, lastTs: null });
+          await probeEverReported();
           setLoading(false);
           return;
         }
@@ -154,6 +183,7 @@ export default function Dashboard() {
         if (error) throw error;
         if (!data?.length) {
           setChartData([]); setChartStats({ min: null, max: null, lastTs: null });
+          await probeEverReported();
           setLoading(false);
           return;
         }
@@ -369,7 +399,7 @@ export default function Dashboard() {
 
   const status = getStatusLabel(averages[metric.key], prevAverages[metric.key]);
   const statusColor = getStatusColor(status);
-  const fallbackInterval = useMemo(
+  const filterIntervalDays = useMemo(
     () => devicesInScope[0]?.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS,
     [devicesInScope]
   );
@@ -549,6 +579,12 @@ export default function Dashboard() {
                       primaryLabel={selectedDevice
                         ? `${selectedDevice.name || selectedDevice.device_mac}${selectedDevice.duct_role ? ` (${selectedDevice.duct_role})` : ""}`
                         : undefined}
+                      emptyTitle={everReported === false ? "This device has never sent telemetry" : undefined}
+                      emptyHint={everReported === false
+                        ? (selectedDevice?.is_lorawan
+                            ? "No sensor_logs rows exist for it at all, in any period. LoRaWAN units reach the database through the network-server webhook rather than over WiFi, so this usually means that ingest path is not delivering — not that the device is asleep."
+                            : "No sensor_logs rows exist for it at all, in any period. A wider range will not help; check that the device is powered and reaching the network.")
+                        : undefined}
                     />
                   )}
 
@@ -647,7 +683,7 @@ export default function Dashboard() {
                   <div className="section-head dash-section-head m-only">
                     <h2 className="section-title">Filter Status</h2>
                   </div>
-                  <FilterStatus deviceIds={scopedDeviceIds} fallbackIntervalDays={fallbackInterval} />
+                  <FilterStatus deviceIds={scopedDeviceIds} intervalDays={filterIntervalDays} />
                 </div>
               </div>
 

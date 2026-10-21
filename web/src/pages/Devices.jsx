@@ -16,7 +16,8 @@ import {
 } from "../lib/config";
 
 export default function Devices() {
-  const { grouped, devices, properties, schemaReady, reload, loading } = useScope();
+  const { grouped, devices, properties, schemaReady, reload, loading,
+          showSpares, setShowSpares, spareCount } = useScope();
   const { session } = useAuth();
 
   // Interactive Landlord Acknowledgements (Account settings). Gates the
@@ -405,6 +406,24 @@ export default function Devices() {
           <DeviceTree grouped={grouped} onEdit={setEditingDevice} />
         )}
 
+        {spareCount > 0 && (
+          <div className="row" style={{ marginBottom: 20, gap: 10, alignItems: "center" }}>
+            <button
+              className={`pill${showSpares ? " active" : ""}`}
+              onClick={() => setShowSpares((v) => !v)}
+              title="Spares, bench rigs and unassigned stock are hidden by default. They are not installed, so their last reading is not a current reading."
+            >
+              <Icon name="package" size={14} />
+              {showSpares ? "Hide" : "Show"} spares ({spareCount})
+            </button>
+            <span className="hint" style={{ fontSize: 11.5 }}>
+              {showSpares
+                ? "Showing stock alongside installed devices — a spare's last reading is not current."
+                : `${spareCount} device${spareCount === 1 ? "" : "s"} not installed, hidden`}
+            </span>
+          </div>
+        )}
+
         {counts.dueSoon > 0 && (
           <div className="banner" style={{ background: "#f973161a", borderColor: "#f9731655", color: "#f97316", marginBottom: 20 }}>
             <Icon name="warning" size={16} />
@@ -629,6 +648,16 @@ function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, o
                 <Icon name="wrench" size={10} /> Technician
               </span>
             )}
+            {(device.status ?? "deployed") !== "deployed" && (
+              <span
+                className="badge"
+                style={{ background: "#6b72801f", color: "#6b7280" }}
+                title="Not installed. Its readings are whatever it last reported, not a current measurement."
+              >
+                <Icon name="package" size={10} />
+                {device.status === "retired" ? "Retired" : "Spare"}
+              </span>
+            )}
           </div>
           {device.hvac_location && (
             <div className="meta-row"><Icon name="location" size={12} /> {device.hvac_location}</div>
@@ -831,6 +860,7 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
       tenant_phone: device.tenant_phone || "",
       tenantEnabled: !!(device.tenant_emails?.length || device.tenant_email || device.tenant_phone),
       duct_role: device.duct_role || "",
+      status: device.status || "deployed",
       pairedWith: device.paired_device_id || "",
     });
   }, [device]);
@@ -887,6 +917,9 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
           hvac_location: form.hvac_location.trim(),
           property_id: form.property_id || null,
           filter_interval_days: interval,
+          // Owner-only: a technician can rename and relocate a device, but
+          // not declare it installed or take it out of service.
+          status: form.status,
           // wake_interval_seconds is deliberately NOT written here. It is set
           // by AirFlow IQ, and trg_guard_wake_interval (20260911000000)
           // rejects changes from anyone who isn't an admin.
@@ -994,6 +1027,29 @@ function EditDeviceModal({ device, properties, allDevices, onClose, onSave, busy
               </select>
             </div>
           )}
+
+          {/* Deployment state. Not cosmetic: a device that is not installed is
+              not expected to report, so the app hides it by default rather
+              than presenting its last reading as a current one. */}
+          <div className="field">
+            <label className="field-label">DEPLOYMENT</label>
+            <div className="row gap-sm">
+              {[["deployed", "Installed"], ["spare", "Spare"], ["retired", "Retired"]].map(([v, lbl]) => (
+                <button
+                  key={v}
+                  className={`pill${form.status === v ? " active" : ""}`}
+                  onClick={() => set({ status: v })}
+                >
+                  {lbl}
+                </button>
+              ))}
+            </div>
+            <p className="hint" style={{ marginTop: 6 }}>
+              {form.status === "deployed"
+                ? "Listed by default and expected to report."
+                : "Hidden from the device list unless you show spares. Its last reading is kept but is not treated as current."}
+            </p>
+          </div>
 
           <div className="field">
             <label className="field-label">FILTER REPLACEMENT INTERVAL</label>

@@ -17,7 +17,7 @@ function getWeekNumber(d) {
   return Math.ceil(((d - j) / 86400000 + j.getDay() + 1) / 7);
 }
 
-export default function FilterStatus({ deviceIds, fallbackIntervalDays = DEFAULT_FILTER_INTERVAL_DAYS }) {
+export default function FilterStatus({ deviceIds, intervalDays = DEFAULT_FILTER_INTERVAL_DAYS }) {
   const { theme } = useTheme();
 
   const [changes, setChanges] = useState([]);
@@ -80,30 +80,11 @@ export default function FilterStatus({ deviceIds, fallbackIntervalDays = DEFAULT
     ? Math.floor((Date.now() - parseTs(installedAt).getTime()) / 86400000)
     : null;
 
-  // Predict remaining life from observed lifespans, falling back to the
-  // device's configured replacement interval when there's no history.
-  const { predictedDaysLeft, avgLifespan } = useMemo(() => {
-    if (daysSinceInstall == null) return { predictedDaysLeft: null, avgLifespan: null };
-
-    if (changes.length >= 2) {
-      const spans = [];
-      for (let i = 0; i < changes.length - 1; i++) {
-        const days = Math.abs(
-          Math.floor((parseTs(changes[i].changed_at) - parseTs(changes[i + 1].changed_at)) / 86400000)
-        );
-        if (days > 0 && days < 730) spans.push(days);
-      }
-      if (spans.length) {
-        const avg = Math.round(spans.reduce((s, v) => s + v, 0) / spans.length);
-        return { predictedDaysLeft: Math.max(0, avg - daysSinceInstall), avgLifespan: avg };
-      }
-    }
-
-    return {
-      predictedDaysLeft: Math.max(0, fallbackIntervalDays - daysSinceInstall),
-      avgLifespan: fallbackIntervalDays,
-    };
-  }, [changes, daysSinceInstall, fallbackIntervalDays]);
+  // A plain countdown against the device's configured replacement interval.
+  // Past filter lifespans are shown in the history below but no longer feed
+  // this number — the interval the operator set is the schedule.
+  const daysLeft =
+    daysSinceInstall == null ? null : Math.max(0, intervalDays - daysSinceInstall);
 
   // Bucket the change history for the small bar chart.
   const barData = useMemo(() => {
@@ -149,18 +130,22 @@ export default function FilterStatus({ deviceIds, fallbackIntervalDays = DEFAULT
     return slots;
   }, [changes, range]);
 
+  // Severity is a fraction of the interval, not a fixed day count: with a
+  // 30-day interval a flat "under 30 days = Soon" rule would never read Good.
+  const fracLeft = daysLeft == null || intervalDays <= 0 ? null : daysLeft / intervalDays;
+
   const predColor =
-    predictedDaysLeft == null ? "#9ca3af"
-      : predictedDaysLeft <= 7 ? "#ef4444"
-      : predictedDaysLeft <= 30 ? "#f97316"
-      : predictedDaysLeft <= 60 ? "#f59e0b"
+    fracLeft == null ? "#9ca3af"
+      : daysLeft === 0 ? "#ef4444"
+      : fracLeft <= 0.15 ? "#f97316"
+      : fracLeft <= 0.35 ? "#f59e0b"
       : "#22c55e";
 
   const predLabel =
-    predictedDaysLeft == null ? "Unknown"
-      : predictedDaysLeft <= 7 ? "Critical"
-      : predictedDaysLeft <= 30 ? "Soon"
-      : predictedDaysLeft <= 60 ? "Watch"
+    fracLeft == null ? "Unknown"
+      : daysLeft === 0 ? "Due"
+      : fracLeft <= 0.15 ? "Soon"
+      : fracLeft <= 0.35 ? "Watch"
       : "Good";
 
   return (
@@ -173,17 +158,17 @@ export default function FilterStatus({ deviceIds, fallbackIntervalDays = DEFAULT
         </div>
       </div>
 
-      {predictedDaysLeft != null && (
+      {daysLeft != null && (
         <div className="banner" style={{ background: `${predColor}14`, borderColor: `${predColor}44`, color: predColor }}>
-          <Icon name={predictedDaysLeft <= 30 ? "warning" : "success"} size={17} />
+          <Icon name={predLabel === "Good" ? "success" : "warning"} size={17} />
           <span className="grow" style={{ color: "var(--text)" }}>
             <strong>
-              {predictedDaysLeft === 0
+              {daysLeft === 0
                 ? "Replace filter now"
-                : `~${predictedDaysLeft} days until replacement`}
+                : `${daysLeft} day${daysLeft === 1 ? "" : "s"} until replacement`}
             </strong>
             <span className="hint" style={{ display: "block", fontWeight: 500 }}>
-              Based on {changes.length} past filter{changes.length !== 1 ? "s" : ""} · avg lifespan {avgLifespan}d
+              Day {Math.min(daysSinceInstall, intervalDays)} of a {intervalDays}-day filter interval
             </span>
           </span>
           <span className="badge" style={{ background: predColor, color: "#fff" }}>{predLabel}</span>

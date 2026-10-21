@@ -450,7 +450,7 @@ export default function DashboardScreen() {
   const [lastFilterChange, setLastFilterChange] = useState(null);
 
   const [predictedDaysLeft, setPredictedDaysLeft] = useState(null);
-  const [avgFilterLifespan, setAvgFilterLifespan] = useState(null);
+  const [filterIntervalDays, setFilterIntervalDays] = useState(DEFAULT_FILTER_INTERVAL_DAYS);
 
   const selectedRange = TIME_RANGES[selectedRangeIndex];
   const isLineChart = selectedRange.hours === 24;
@@ -469,7 +469,7 @@ export default function DashboardScreen() {
   useEffect(() => {
     if (GEMINI_API_KEY && Object.keys(averages).length > 0) { setAiInsight(null); runAiInsight(); }
   }, [averages, selectedRangeIndex]);
-  useEffect(() => { computePrediction(); }, [filterChanges, filterInstalledAt]);
+  useEffect(() => { computePrediction(); }, [devices, filterInstalledAt]);
 
   // FIX: clear selectedBar when switching chart types to avoid stale touch state
   const handleRangeChange = (i) => {
@@ -584,28 +584,17 @@ export default function DashboardScreen() {
     setFilterChanges(changes.reverse());
   };
 
+  // A plain countdown against the device's configured replacement interval.
+  // Past filter lifespans are still listed in the change history below, but
+  // they no longer set this number — the interval the operator set is the
+  // schedule.
   const computePrediction = () => {
-    if (!filterInstalledAt) { setPredictedDaysLeft(null); setAvgFilterLifespan(null); return; }
+    const intervalDays = devices[0]?.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS;
+    setFilterIntervalDays(intervalDays);
+    if (!filterInstalledAt) { setPredictedDaysLeft(null); return; }
     const daysSinceInstall = Math.floor(
       (Date.now() - new Date(filterInstalledAt.replace(" ", "T")).getTime()) / 86400000
     );
-    if (filterChanges.length >= 2) {
-      const lifespans = [];
-      for (let i = 0; i < filterChanges.length - 1; i++) {
-        const curr = new Date(filterChanges[i].changed_at.replace(" ", "T"));
-        const next = new Date(filterChanges[i + 1].changed_at.replace(" ", "T"));
-        const days = Math.abs(Math.floor((curr - next) / 86400000));
-        if (days > 0 && days < 730) lifespans.push(days);
-      }
-      if (lifespans.length > 0) {
-        const avg = Math.round(lifespans.reduce((s, v) => s + v, 0) / lifespans.length);
-        setAvgFilterLifespan(avg);
-        setPredictedDaysLeft(Math.max(0, avg - daysSinceInstall));
-        return;
-      }
-    }
-    const intervalDays = devices[0]?.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS;
-    setAvgFilterLifespan(intervalDays);
     setPredictedDaysLeft(Math.max(0, intervalDays - daysSinceInstall));
   };
 
@@ -808,9 +797,20 @@ export default function DashboardScreen() {
   const daysSinceInstall = filterInstalledAt ? Math.floor((Date.now() - new Date(filterInstalledAt.replace(" ", "T"))) / 86400000) : null;
   const expandedMetricObj = ALL_METRICS.find(m => m.key === expandedMetric?.key);
 
-  const predColor = predictedDaysLeft != null
-    ? predictedDaysLeft <= 7 ? "#ef4444" : predictedDaysLeft <= 30 ? "#f97316" : predictedDaysLeft <= 60 ? "#f59e0b" : "#22c55e"
-    : "#9ca3af";
+  // Severity is a fraction of the interval, not a fixed day count: with a
+  // 30-day interval a flat "under 30 days = Soon" rule would never read Good.
+  const fracLeft = predictedDaysLeft == null || filterIntervalDays <= 0
+    ? null : predictedDaysLeft / filterIntervalDays;
+  const predColor = fracLeft == null ? "#9ca3af"
+    : predictedDaysLeft === 0 ? "#ef4444"
+    : fracLeft <= 0.15 ? "#f97316"
+    : fracLeft <= 0.35 ? "#f59e0b"
+    : "#22c55e";
+  const predLabel = fracLeft == null ? "Unknown"
+    : predictedDaysLeft === 0 ? "Due"
+    : fracLeft <= 0.15 ? "Soon"
+    : fracLeft <= 0.35 ? "Watch"
+    : "Good";
 
   // FIX: derive selectedBar from index to avoid stale object references
   const selectedBar = selectedBarIndex != null ? chartData[selectedBarIndex] : null;
@@ -1116,17 +1116,15 @@ export default function DashboardScreen() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={[styles.predTitle, { color: theme.text }]}>
-                {predictedDaysLeft === 0 ? "Replace filter now" : `~${predictedDaysLeft} days until replacement`}
+                {predictedDaysLeft === 0 ? "Replace filter now" : `${predictedDaysLeft} day${predictedDaysLeft === 1 ? "" : "s"} until replacement`}
               </Text>
               <Text style={[styles.predSub, { color: theme.subtext }]}>
-                Based on {filterChanges.length} past filter{filterChanges.length !== 1 ? "s" : ""} · avg lifespan {avgFilterLifespan}d
+                Day {Math.min(daysSinceInstall ?? 0, filterIntervalDays)} of a {filterIntervalDays}-day filter interval
               </Text>
             </View>
-            {predictedDaysLeft <= 7 || predictedDaysLeft <= 30 || predictedDaysLeft > 60 ? (
+            {predLabel !== "Watch" ? (
               <View style={[styles.predBadge, { backgroundColor: predColor }]}>
-                <Text style={styles.predBadgeText}>
-                  {predictedDaysLeft <= 7 ? "Critical" : predictedDaysLeft <= 30 ? "Soon" : "Good"}
-                </Text>
+                <Text style={styles.predBadgeText}>{predLabel}</Text>
               </View>
             ) : (
               <TouchableOpacity
@@ -1138,7 +1136,7 @@ export default function DashboardScreen() {
                     : devices[0]?.tenant_email;
                   if (tenantEmail) {
                     const subject = encodeURIComponent("Filter Replacement Reminder");
-                    const body = encodeURIComponent(`Hi,\n\nJust a heads up — your HVAC filter has approximately ${predictedDaysLeft} days left before it needs replacing. Please schedule a replacement at your earliest convenience.\n\nThank you.`);
+                    const body = encodeURIComponent(`Hi,\n\nJust a heads up — your HVAC filter has ${predictedDaysLeft} days left in its ${filterIntervalDays}-day replacement interval. Please schedule a replacement at your earliest convenience.\n\nThank you.`);
                     Linking.openURL(`mailto:${tenantEmail}?subject=${subject}&body=${body}`);
                   } else {
                     Alert.alert("No Tenant Email", "Add a tenant email in the Devices tab to use this feature.");

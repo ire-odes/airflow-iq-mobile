@@ -7,7 +7,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../context/AuthContext";
 import { useScope, UNASSIGNED_ID } from "../context/ScopeContext";
 import { groupPairs } from "../lib/devicePairs";
-import { getFilterProgress, getOnlineStatus, getBatteryStage, latestTs } from "../lib/metrics";
+import { getFilterProgress, getOnlineStatus, getBatteryStage, getBatteryAlert, typicalBatteryVoltage, latestTs } from "../lib/metrics";
 import { getLastUploads } from "../lib/audioRecordings";
 import { timeAgo, wakeLabel } from "../lib/format";
 import {
@@ -65,14 +65,15 @@ export default function Devices() {
 
     const [uploads] = await Promise.all([getLastUploads(devices), Promise.all(devices.map(async (dev) => {
       const [{ data: logs }, { data: rfidLogs }] = await Promise.all([
+        // Several readings, not one: the battery shown is their median.
         supabase.from("sensor_logs").select("recorded_at, battery")
-          .eq("device_id", dev.id).order("recorded_at", { ascending: false }).limit(1),
+          .eq("device_id", dev.id).order("recorded_at", { ascending: false }).limit(12),
         supabase.from("sensor_logs").select("recorded_at, rfid")
           .eq("device_id", dev.id).not("rfid", "is", null).neq("rfid", "")
           .order("recorded_at", { ascending: false }).limit(100),
       ]);
 
-      if (logs?.length) nextStats[dev.id] = { latest: logs[0] };
+      if (logs?.length) nextStats[dev.id] = { latest: logs[0], battery: typicalBatteryVoltage(logs) };
 
       if (rfidLogs?.length) {
         // The oldest log still carrying the current tag is when it was fitted.
@@ -321,7 +322,8 @@ export default function Devices() {
       const fp = getFilterProgress(installDates[d.id], d.filter_interval_days || DEFAULT_FILTER_INTERVAL_DAYS);
       return fp && fp.pct >= 90;
     }).length;
-    return { total: devices.length, online, offline: devices.length - online, dueSoon };
+    const batteries = devices.filter((d) => getBatteryAlert(stats[d.id]?.battery)).length;
+    return { total: devices.length, online, offline: devices.length - online, dueSoon, batteries };
   }, [devices, stats, installDates]);
 
   return (
@@ -410,6 +412,15 @@ export default function Devices() {
             <Icon name="warning" size={16} />
             <span>
               {counts.dueSoon} device{counts.dueSoon > 1 ? "s need" : " needs"} a filter replacement soon
+            </span>
+          </div>
+        )}
+
+        {counts.batteries > 0 && (
+          <div className="banner" style={{ background: "#f973161a", borderColor: "#f9731655", color: "#f97316", marginBottom: 20 }}>
+            <Icon name="battery" size={16} />
+            <span>
+              {counts.batteries} device{counts.batteries > 1 ? "s need" : " needs"} new batteries
             </span>
           </div>
         )}
@@ -536,7 +547,7 @@ function PropertyGroupCard({ property, propDevices, stats, installDates, onEdit,
                 key={d.id}
                 device={d}
                 lastSeen={stats[d.id]?.lastSeen}
-                latest={stats[d.id]?.latest}
+                battery={stats[d.id]?.battery}
                 installedAt={installDates[d.id]}
                 onEdit={() => onEdit(d)}
                 onRemove={() => onRemove(d)}
@@ -595,7 +606,7 @@ const tenantSummary = (d) => {
   return list.length === 1 ? list[0] : `${list[0]} +${list.length - 1}`;
 };
 
-function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, onRecalibrate, onAcknowledge }) {
+function DeviceCard({ device, lastSeen, battery, installedAt, onEdit, onRemove, onRecalibrate, onAcknowledge }) {
   const status = getOnlineStatus(lastSeen);
   const statusColor = status === "online" ? "#22c55e" : status === "idle" ? "#f59e0b" : "#9ca3af";
   const statusLabel = status === "online" ? "Online" : status === "idle" ? "Idle" : "Offline";
@@ -604,7 +615,8 @@ function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, o
   const fpColor = !fp ? "#9ca3af" : fp.pct >= 100 ? "#ef4444" : fp.pct >= 75 ? "#f59e0b" : "#22c55e";
   const fpLabel = !fp ? "" : fp.pct >= 100 ? "Replace now" : fp.pct >= 90 ? "Replace soon" : fp.pct >= 75 ? "Watch closely" : `${fp.daysLeft}d left`;
 
-  const battStage = getBatteryStage(latest?.battery);
+  const battStage = getBatteryStage(battery);
+  const battAlert = getBatteryAlert(battery);
 
   return (
     <article className="card device-card">
@@ -642,7 +654,7 @@ function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, o
             <span className="dot" style={{ background: statusColor }} /> {statusLabel}
           </span>
           {battStage && (
-            <span title={`Battery: ${battStage.label}`}>
+            <span title={`Battery: ${battStage.label} (${battery.toFixed(2)} V)`}>
               <BatteryStageIcon stage={battStage} />
             </span>
           )}
@@ -650,6 +662,19 @@ function DeviceCard({ device, lastSeen, latest, installedAt, onEdit, onRemove, o
       </div>
 
       {lastSeen && <div className="hint" style={{ fontSize: 11.5 }}>Last seen {timeAgo(lastSeen)}</div>}
+
+      {battAlert && (
+        <span
+          className="row"
+          style={{
+            alignSelf: "flex-start", gap: 6, padding: "5px 12px", borderRadius: 999,
+            border: `1px solid ${battAlert.color}55`, background: `${battAlert.color}1a`,
+            color: battAlert.color, fontSize: 12, fontWeight: 700,
+          }}
+        >
+          <Icon name="battery" size={13} /> Replace batteries
+        </span>
+      )}
 
       {fp && (
         <div>

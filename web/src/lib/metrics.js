@@ -142,6 +142,39 @@ export function getBatteryStage(voltage) {
   return BATTERY_STAGES.find((s) => voltage >= s.min);
 }
 
+// One reading is too noisy to act on: P2 swung 1.96-2.28V within a single
+// day as the cell sagged under the WiFi upload. The median of the recent
+// readings is what the card and the replacement prompt use. Anything under
+// 1V is not a measurement -- the LoRa boards report ~0V from an unwired ADC,
+// and WiFi units log the odd 0.00 glitch -- so those are dropped, and a
+// device with nothing else shows no battery at all rather than "Critical".
+export function typicalBatteryVoltage(readings) {
+  const v = (readings || [])
+    .map((r) => Number(r?.battery))
+    .filter((x) => Number.isFinite(x) && x >= 1)
+    .sort((a, b) => a - b);
+  if (!v.length) return null;
+  const mid = Math.floor(v.length / 2);
+  return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
+}
+
+// When to tell people to swap the batteries. Set from P2's run-down
+// (Oct 2026), the only one recorded end to end: its daily median crossed
+// 2.55V five and a half days before it went silent and 2.4V two and a half days
+// before, and uploads had already started failing in between. So "soon" is
+// roughly a week's notice, and "now" means it may stop reporting any day.
+export const BATTERY_REPLACE_SOON_V = 2.55;
+export const BATTERY_REPLACE_NOW_V = 2.4;
+
+export function getBatteryAlert(voltage) {
+  if (voltage == null) return null;
+  // Both levels show the same "Replace batteries" pill; the colour says
+  // how close it is.
+  if (voltage < BATTERY_REPLACE_NOW_V) return { level: "now", color: "#ef4444" };
+  if (voltage < BATTERY_REPLACE_SOON_V) return { level: "soon", color: "#f97316" };
+  return null;
+}
+
 export function getFilterProgress(installedAt, intervalDays) {
   if (!installedAt || !intervalDays) return null;
   const daysSince = Math.floor((Date.now() - parseTs(installedAt).getTime()) / 86400000);
